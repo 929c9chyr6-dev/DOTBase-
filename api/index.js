@@ -107,6 +107,45 @@ function defaultSystemMessage(mode) {
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
+const MODULE_KEYS = ['service','pneu','transport','maintenance','settings'];
+const MODULE_LABELS = {
+  service:'SERVIS', pneu:'PNEU / DOT', transport:'DOPRAVA', maintenance:'ÚDRŽBA', settings:'NASTAVENÍ'
+};
+const DEFAULT_MODULES = {
+  service:{ visible:true, online:true, offlineMessage:'Modul SERVIS je dočasně mimo provoz.' },
+  pneu:{ visible:true, online:true, offlineMessage:'Modul PNEU / DOT je dočasně mimo provoz.' },
+  transport:{ visible:true, online:true, offlineMessage:'Dopravní report je dočasně mimo provoz.' },
+  maintenance:{ visible:true, online:true, offlineMessage:'Modul ÚDRŽBA je dočasně mimo provoz.' },
+  settings:{ visible:true, online:true, offlineMessage:'Nastavení aplikace je dočasně mimo provoz.' },
+};
+function normalizeModules(raw) {
+  const input = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (const key of MODULE_KEYS) {
+    const src = input[key] && typeof input[key] === 'object' ? input[key] : {};
+    out[key] = {
+      visible: src.visible !== false,
+      online: src.online !== false,
+      offlineMessage: cleanText(src.offlineMessage || DEFAULT_MODULES[key].offlineMessage, 220),
+    };
+  }
+  return out;
+}
+function moduleState(cfg,key){ return normalizeModules(cfg.modules)[key] || {visible:true,online:true,offlineMessage:'Modul je dočasně mimo provoz.'}; }
+function publicModules(cfg,currentUser){
+  const modules=normalizeModules(cfg.modules);
+  return Object.fromEntries(MODULE_KEYS.map((key)=>[key,{
+    visible: currentUser?.role==='admin' ? true : modules[key].visible,
+    online: currentUser?.role==='admin' ? true : modules[key].online,
+    offlineMessage: modules[key].offlineMessage,
+  }]));
+}
+function actionModule(action){
+  if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
+  if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
+  if (['pushSubscribe','pushUnsubscribe','myPushDevices'].includes(action)) return 'settings';
+  return null;
+}
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
 const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','attentionView','attentionEdit','notificationsReceive'];
 const BASE_PERMISSIONS = {
@@ -195,12 +234,13 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 6;
+  cfg.version = 7;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
   cfg.system = systemState(cfg);
   cfg.transport = normalizeTransportConfig(cfg.transport);
+  cfg.modules = normalizeModules(cfg.modules);
   for (const u of cfg.users) {
     if (u.active === undefined) u.active = true;
     if (!u.createdAt) u.createdAt = null;
@@ -414,6 +454,7 @@ async function publicState(cfg, recs, currentUser) {
       return { mode: s.mode, message: s.message || defaultSystemMessage(s.mode), customMessage: currentUser.role === 'admin' ? (s.message || '') : undefined, updatedAt: s.updatedAt || null, updatedBy: currentUser.role === 'admin' ? (s.updatedBy || null) : null };
     })(),
     transport: publicTransportConfig(cfg, currentUser),
+    modules: publicModules(cfg, currentUser),
     push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
   };
   if (currentUser.role !== 'admin') return base;
@@ -427,6 +468,7 @@ async function publicState(cfg, recs, currentUser) {
     notificationLog: notifications.slice(0, 150).map((n) => ({ ...n, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '' })),
     notificationSettings: cfg.notificationSettings,
     transportAdmin: { ...cfg.transport, sourceConfigured: !!GOLEMIO_API_KEY, sourceName: 'NDIC přes Golemio' },
+    modulesAdmin: normalizeModules(cfg.modules),
   };
 }
 function validateRecordFields(car, season, dot, mileage) {
@@ -678,6 +720,12 @@ export default async function handler(req, res) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
 
+    const requestedModule = actionModule(body.action);
+    if (currentUser.role !== 'admin' && requestedModule) {
+      const ms = moduleState(cfg, requestedModule);
+      if (!ms.online) return json(res, 423, { error:'MODULE_OFFLINE', module:requestedModule, moduleLabel:MODULE_LABELS[requestedModule], message:ms.offlineMessage });
+    }
+
     if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), currentUser));
 
     if (body.action === 'heartbeat') {
@@ -861,6 +909,22 @@ export default async function handler(req, res) {
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
 
+
+    if (body.action === 'adminSaveModules') {
+      const incoming = body.modules && typeof body.modules === 'object' ? body.modules : {};
+      const before = normalizeModules(cfg.modules);
+      const next = normalizeModules(cfg.modules);
+      for (const key of MODULE_KEYS) {
+        if (!incoming[key] || typeof incoming[key] !== 'object') continue;
+        if (typeof incoming[key].visible === 'boolean') next[key].visible = incoming[key].visible;
+        if (typeof incoming[key].online === 'boolean') next[key].online = incoming[key].online;
+        if (incoming[key].offlineMessage !== undefined) next[key].offlineMessage = cleanText(incoming[key].offlineMessage,220) || DEFAULT_MODULES[key].offlineMessage;
+      }
+      cfg.modules = next;
+      await writeConfig(cfg);
+      await appendAudit(currentUser,'module_settings','Upraveno zobrazení a dostupnost modulů',{before,after:next});
+      return json(res,200,{ok:true,modulesAdmin:next});
+    }
 
     if (body.action === 'adminSaveTransportSettings') {
       const s=body.settings||{};
@@ -1149,7 +1213,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminBackup') {
       const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 6, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg), transport: cfg.transport });
+      return json(res, 200, { version: 6, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg), transport: cfg.transport, modules: normalizeModules(cfg.modules) });
     }
 
     return json(res, 400, { error: 'ACTION' });
