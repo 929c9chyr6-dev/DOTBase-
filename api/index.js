@@ -512,7 +512,7 @@ export default async function handler(req, res) {
       const before = { ...r };
       const after = { ...r, carId: car.id, season, dot, mileage };
       const newPath = recordPath(after);
-      await put(newPath, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+      await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
       if (newPath !== r.path) await del(r.path);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
@@ -547,8 +547,7 @@ export default async function handler(req, res) {
       if (!issue) return json(res, 409, { error: 'ISSUE_RESOLVED' });
       const car = cfg.cars.find((x) => x.id === issue.carId && x.active !== false);
       if (!car) return json(res, 404, { error: 'CAR' });
-      const forcedSeason = issue.type === 'missing_summer' ? 'summer' : issue.type === 'missing_winter' ? 'winter' : null;
-      const season = forcedSeason || String(body.season || issue.season || '');
+      const season = String(body.season || issue.season || '');
       const dot = String(body.dot || '');
       const mileage = Number(body.mileage);
       const error = validateRecordFields(car, season, dot, mileage);
@@ -560,7 +559,7 @@ export default async function handler(req, res) {
         const before = { ...r };
         const after = { ...r, season, dot, mileage };
         const newPath = recordPath(after);
-        await put(newPath, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+        await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
         if (newPath !== r.path) await del(r.path);
         await appendAudit(currentUser, 'attention_issue_edit', `Opraveno upozornění ${car.plate}: ${issue.text}`, { issueKey, before, after: { ...after, path: newPath } });
       } else {
@@ -649,7 +648,7 @@ export default async function handler(req, res) {
       const before = { ...r };
       const after = { ...r, carId: car.id, season, dot, mileage };
       const newPath = recordPath(after);
-      await put(newPath, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+      await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
       if (newPath !== r.path) await del(r.path);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
