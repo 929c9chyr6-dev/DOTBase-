@@ -5,6 +5,18 @@ const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:
 const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
 function can(k){return me?.role==='admin'||!!D.permissions?.[k]}
 function roleLabel(r){return ROLE_LABELS[r]||r||'—'}
+const themeMedia=matchMedia('(prefers-color-scheme: dark)');
+function themePreference(){const p=localStorage.getItem('appTheme')||'system';return ['light','dark','system'].includes(p)?p:'system'}
+function applyTheme(pref=themePreference()){
+  const dark=pref==='dark'||(pref==='system'&&themeMedia.matches),effective=dark?'dark':'light';
+  document.documentElement.dataset.theme=effective;
+  document.documentElement.dataset.themePreference=pref;
+  const meta=document.querySelector('meta[name="theme-color"]');if(meta)meta.content=dark?'#0b1220':'#111827';
+  if($('themeMode'))$('themeMode').value=pref;
+  if($('themeCurrent'))$('themeCurrent').textContent=dark?'🌙 Tmavý':'☀️ Světlý';
+}
+function setThemePreference(pref){if(!['light','dark','system'].includes(pref))return;localStorage.setItem('appTheme',pref);applyTheme(pref)}
+themeMedia.addEventListener?.('change',()=>{if(themePreference()==='system')applyTheme('system')});
 
 async function api(action,p={}){
   const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',...(tok?{Authorization:'Bearer '+tok}:{})},body:JSON.stringify({action,...p})});
@@ -214,7 +226,7 @@ function renderModuleShell(){
   if($('serviceVehicles'))renderVehiclePreviews('serviceVehicles','service');
   if($('maintenanceVehicles'))renderVehiclePreviews('maintenanceVehicles','maintenance');
   if($('settingsUser'))$('settingsUser').textContent=me?.name||'—';
-  if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);
+  if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);if($('themeMode'))$('themeMode').value=themePreference();if($('themeCurrent'))$('themeCurrent').textContent=document.documentElement.dataset.theme==='dark'?'🌙 Tmavý':'☀️ Světlý';
   if($('homeAdminCard'))$('homeAdminCard').hidden=me?.role!=='admin';
   document.querySelectorAll('[data-module="pneu"]').forEach(x=>x.hidden=!hasPneuAccess());
   const count=attentionIssues().length;
@@ -324,6 +336,7 @@ function applyAccess(){
 function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();applyAccess();renderNoticeOverlay()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
+if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
 document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
@@ -340,5 +353,5 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 window.addEventListener('pagehide',()=>{if(!tok)return;fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({action:'heartbeat',visible:false,active:false}),keepalive:true}).catch(()=>{})});
 setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))refresh()},12000);
 setInterval(heartbeat,45000);
-if('serviceWorker'in navigator)ensureSW().catch(()=>{});
+applyTheme();if('serviceWorker'in navigator)ensureSW().catch(()=>{});
 })();
