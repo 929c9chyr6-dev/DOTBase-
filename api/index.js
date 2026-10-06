@@ -741,8 +741,10 @@ export default async function handler(req, res) {
 
 
     if (body.action === 'trafficReport') {
+      if (cfg.transport?.enabled === false && currentUser.role !== 'admin') return json(res, 403, { error: 'TRAFFIC_DISABLED' });
       const report = await buildTrafficReport(cfg, false);
-      const alertResult = await maybeNotifyTrafficUser(cfg, currentUser, report);
+      const allowAlerts = currentUser.role === 'admin' || sys.mode !== 'read_only';
+      const alertResult = allowAlerts ? await maybeNotifyTrafficUser(cfg, currentUser, report) : { sent: 0, skipped: 'read_only' };
       return json(res, 200, { ...report, alertResult });
     }
 
