@@ -141,10 +141,26 @@ async function appendAudit(actor, action, summary, details = null) {
 async function getPushStore() { return await readJson('push.json', []); }
 async function writePushStore(rows) { await writeJson('push.json', rows.slice(0, 1000)); }
 async function getNotificationLog() { return await readJson('notifications.json', []); }
-async function appendNotificationLog(row) {
+async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
+async function createNotification(row) {
   const rows = await getNotificationLog();
-  rows.unshift({ id: uid('n'), ts: Date.now(), createdAt: new Date().toISOString(), ...row });
-  await writeJson('notifications.json', rows.slice(0, 300));
+  const n = {
+    id: uid('n'), ts: Date.now(), createdAt: new Date().toISOString(),
+    recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))],
+    acks: [],
+    ...row,
+  };
+  rows.unshift(n);
+  await writeNotificationLog(rows);
+  return n;
+}
+async function patchNotification(id, patch) {
+  const rows = await getNotificationLog();
+  const n = rows.find((x) => x.id === id);
+  if (!n) return null;
+  Object.assign(n, patch);
+  await writeNotificationLog(rows);
+  return n;
 }
 function enrichRecords(cfg, recs) {
   const byUser = Object.fromEntries(cfg.users.map((u) => [u.id, u.name]));
@@ -153,6 +169,28 @@ function enrichRecords(cfg, recs) {
 }
 function latestRecord(recs, carId, season) {
   return recs.find((r) => r.carId === carId && (!season || r.season === season));
+}
+async function buildVehicleDetail(cfg, recs, carId) {
+  const car = cfg.cars.find((c) => c.id === carId);
+  if (!car) return null;
+  const enriched = enrichRecords(cfg, recs).filter((r) => r.carId === carId);
+  const audit = await getAudit();
+  const timeline = audit.filter((a) => {
+    const d = a.details || {};
+    return d.carId === carId || d.id === carId || d.before?.carId === carId || d.after?.carId === carId ||
+      d.before?.id === carId || d.after?.id === carId || (Array.isArray(d.carIds) && d.carIds.includes(carId)) ||
+      String(a.summary || '').includes(car.plate);
+  }).slice(0, 5).map((a) => ({
+    id: a.id, createdAt: a.createdAt, actorName: a.actorName, action: a.action, summary: a.summary,
+  }));
+  return {
+    car: { id: car.id, plate: car.plate, name: car.name, active: car.active !== false, createdAt: car.createdAt, updatedAt: car.updatedAt },
+    latest: enriched[0] || null,
+    latestSummer: enriched.find((r) => r.season === 'summer') || null,
+    latestWinter: enriched.find((r) => r.season === 'winter') || null,
+    records: enriched.slice(0, 5),
+    timeline,
+  };
 }
 function computeIssues(cfg, recs) {
   const issues = [];
@@ -205,21 +243,31 @@ function userStats(cfg, recs, pushes) {
 async function publicState(cfg, recs, session) {
   const baseUsers = cfg.users.map((u) => ({ id: u.id, name: u.name, role: u.role, active: u.active }));
   const records = enrichRecords(cfg, recs);
+  const notifications = await getNotificationLog();
+  const carById = Object.fromEntries(cfg.cars.map((c) => [c.id, c]));
+  const pendingNotifications = notifications.filter((n) =>
+    Array.isArray(n.recipientUserIds) && n.recipientUserIds.includes(session.uid) &&
+    !(n.acks || []).some((a) => a.userId === session.uid)
+  ).map((n) => ({
+    id: n.id, type: n.type, title: n.title, body: n.body, createdAt: n.createdAt,
+    carId: n.carId || null, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '',
+  }));
   const base = {
     me: baseUsers.find((u) => u.id === session.uid),
     cars: cfg.cars.filter((c) => c.active !== false),
     records,
+    pendingNotifications,
     push: { publicKey: VAPID_PUBLIC_KEY },
   };
   if (session.role !== 'admin') return base;
-  const [audit, pushes, notifications] = await Promise.all([getAudit(), getPushStore(), getNotificationLog()]);
+  const [audit, pushes] = await Promise.all([getAudit(), getPushStore()]);
   return {
     ...base,
     users: userStats(cfg, recs, pushes),
     allCars: cfg.cars,
     dashboard: dashboard(cfg, recs),
     audit: audit.slice(0, 200),
-    notificationLog: notifications.slice(0, 100),
+    notificationLog: notifications.slice(0, 150).map((n) => ({ ...n, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '' })),
     notificationSettings: cfg.notificationSettings,
   };
 }
@@ -338,7 +386,47 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true });
     }
 
+    if (body.action === 'notificationRespond') {
+      const notificationId = String(body.notificationId || '');
+      const response = String(body.response || '');
+      if (!['understood', 'view_vehicle'].includes(response)) return json(res, 400, { error: 'RESPONSE' });
+      const notifications = await getNotificationLog();
+      const n = notifications.find((x) => x.id === notificationId);
+      if (!n || !Array.isArray(n.recipientUserIds) || !n.recipientUserIds.includes(currentUser.id)) return json(res, 403, { error: 'NOTIFICATION' });
+      let ack = (n.acks || []).find((a) => a.userId === currentUser.id);
+      if (!ack) {
+        ack = { userId: currentUser.id, userName: currentUser.name, response, at: new Date().toISOString() };
+        n.acks ||= [];
+        n.acks.push(ack);
+        await writeNotificationLog(notifications);
+        const responseText = response === 'view_vehicle' ? 'zobrazil vozidlo' : 'potvrdil Rozumím';
+        await appendAudit(currentUser, 'notification_ack', currentUser.name + ' ' + responseText + ': ' + n.title, { notificationId: n.id, carId: n.carId || null, response });
+        const adminIds = cfg.users.filter((u) => u.active && u.role === 'admin' && u.id !== currentUser.id).map((u) => u.id);
+        if (adminIds.length) {
+          await sendPushToUsers(cfg, adminIds, {
+            title: 'Potvrzeno oznámení',
+            body: currentUser.name + ': ' + (response === 'view_vehicle' ? 'Zobrazil vozidlo' : 'Rozumím') + ' – ' + n.title,
+            tag: 'ack-' + n.id + '-' + currentUser.id,
+            url: '/?tab=admin',
+          });
+        }
+      }
+      if (response === 'view_vehicle') {
+        if (!n.carId) return json(res, 400, { error: 'CAR' });
+        const vehicle = await buildVehicleDetail(cfg, await getRecords(), n.carId);
+        if (!vehicle) return json(res, 404, { error: 'CAR' });
+        return json(res, 200, { ok: true, vehicle });
+      }
+      return json(res, 200, { ok: true });
+    }
+
     if (session.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
+
+    if (body.action === 'adminVehicleDetail') {
+      const vehicle = await buildVehicleDetail(cfg, await getRecords(), String(body.carId || ''));
+      if (!vehicle) return json(res, 404, { error: 'CAR' });
+      return json(res, 200, { ok: true, vehicle });
+    }
 
     if (body.action === 'adminAddCar') {
       const plate = cleanPlate(body.plate), name = cleanText(body.name, 80);
@@ -360,7 +448,7 @@ export default async function handler(req, res) {
       const before = { plate: car.plate, name: car.name };
       car.plate = plate; car.name = name; car.updatedAt = new Date().toISOString();
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { before, after: { plate, name } });
+      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { carId: car.id, before, after: { carId: car.id, plate, name } });
       return json(res, 200, { ok: true });
     }
 
@@ -493,10 +581,19 @@ export default async function handler(req, res) {
       let users = cfg.users.filter((u) => u.active);
       if (recipient !== 'all') users = users.filter((u) => u.id === recipient);
       if (!users.length) return json(res, 404, { error: 'USER' });
-      const result = await sendPushToUsers(cfg, users.map((u) => u.id), { title, body: message, tag: `admin-${Date.now()}`, url: '/' });
-      await appendNotificationLog({ type: 'manual', title, body: message, recipient, byUserId: currentUser.id, byUserName: currentUser.name, ...result });
-      await appendAudit(currentUser, 'notification_send', `Odesláno oznámení „${title}“ (${result.sent}/${result.devices || 0})`, { recipient, ...result });
-      return json(res, 200, { ok: true, ...result });
+      const carId = body.carId ? String(body.carId) : null;
+      const car = carId ? cfg.cars.find((c) => c.id === carId) : null;
+      if (carId && !car) return json(res, 404, { error: 'CAR' });
+      const n = await createNotification({
+        type: 'manual', title, body: message, recipient, recipientUserIds: users.map((u) => u.id),
+        carId: car?.id || null, carPlate: car?.plate || '', byUserId: currentUser.id, byUserName: currentUser.name,
+      });
+      const result = await sendPushToUsers(cfg, users.map((u) => u.id), {
+        title, body: message, tag: 'notification-' + n.id, url: '/?notification=' + encodeURIComponent(n.id),
+      });
+      await patchNotification(n.id, result);
+      await appendAudit(currentUser, 'notification_send', 'Odesláno oznámení „' + title + '“ (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, recipient, carId: car?.id || null, ...result });
+      return json(res, 200, { ok: true, notificationId: n.id, ...result });
     }
 
     if (body.action === 'adminBackup') {

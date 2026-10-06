@@ -38,10 +38,17 @@ async function getRecords() {
   }).filter(Boolean).sort((a, b) => b.ts - a.ts);
 }
 function latest(recs, carId, season) { return recs.find((r) => r.carId === carId && (!season || r.season === season)); }
-async function appendNotificationLog(row) {
-  const rows = await readJson('notifications.json', []);
-  rows.unshift({ id: `n${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`, ts: Date.now(), createdAt: new Date().toISOString(), ...row });
-  await writeJson('notifications.json', rows.slice(0, 300));
+async function getNotificationLog() { return await readJson('notifications.json', []); }
+async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
+function nid(prefix = 'n') { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
+async function createNotification(row) {
+  const rows = await getNotificationLog();
+  const n = { id: nid(), ts: Date.now(), createdAt: new Date().toISOString(), recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))], acks: [], ...row };
+  rows.unshift(n); await writeNotificationLog(rows); return n;
+}
+async function patchNotification(id, patch) {
+  const rows = await getNotificationLog(); const n = rows.find((x) => x.id === id); if (!n) return null;
+  Object.assign(n, patch); await writeNotificationLog(rows); return n;
 }
 async function appendAudit(summary, details) {
   const rows = await readJson('audit.json', []);
@@ -70,11 +77,13 @@ async function sendToUsers(userIds, payload) {
 }
 function mileageIssues(cfg, recs) {
   const out = [];
-  for (const c of cfg.cars.filter((x) => x.active !== false)) {
-    const cr = recs.filter((r) => r.carId === c.id).sort((a, b) => a.ts - b.ts);
+  for (const car of cfg.cars.filter((x) => x.active !== false)) {
+    const cr = recs.filter((r) => r.carId === car.id).sort((a, b) => a.ts - b.ts);
+    let lastIssue = null;
     for (let i = 1; i < cr.length; i++) {
-      if (cr[i].mileage < cr[i - 1].mileage) out.push(`${c.plate}: ${cr[i - 1].mileage} → ${cr[i].mileage} km`);
+      if (cr[i].mileage < cr[i - 1].mileage) lastIssue = { carId: car.id, plate: car.plate, vehicle: car.name, from: cr[i - 1].mileage, to: cr[i].mileage, recordId: cr[i].id };
     }
+    if (lastIssue) out.push(lastIssue);
   }
   return out;
 }
@@ -98,71 +107,69 @@ export default async function handler(req, res) {
     const results = [];
 
     if (s.incompleteEnabled) {
-      const missing = [];
-      for (const c of cfg.cars.filter((x) => x.active !== false)) {
-        const noSummer = !!s.incompleteMissingSummer && !latest(recs, c.id, 'summer');
-        const noWinter = !!s.incompleteMissingWinter && !latest(recs, c.id, 'winter');
+      const users = cfg.users.filter((u) => u.active && (s.incompleteRecipients === 'all' || u.role !== 'admin'));
+      for (const car of cfg.cars.filter((x) => x.active !== false)) {
+        const noSummer = !!s.incompleteMissingSummer && !latest(recs, car.id, 'summer');
+        const noWinter = !!s.incompleteMissingWinter && !latest(recs, car.id, 'winter');
         if (!noSummer && !noWinter) continue;
-        const key = `incomplete:${c.id}:${noSummer ? 'S' : ''}${noWinter ? 'W' : ''}`;
-        const last = Number(state.lastSent[key] || 0);
+        const key = 'incomplete:' + car.id + ':' + (noSummer ? 'S' : '') + (noWinter ? 'W' : '');
+        const lastSent = Number(state.lastSent[key] || 0);
         const repeatMs = Math.max(1, Number(s.incompleteRepeatDays || 3)) * 86400000;
-        if (now - last < repeatMs) continue;
-        missing.push({ car: c, noSummer, noWinter, key });
-      }
-      if (missing.length) {
-        const users = cfg.users.filter((u) => u.active && (s.incompleteRecipients === 'all' || u.role !== 'admin'));
-        const lines = missing.slice(0, 5).map((x) => `${x.car.plate}: ${x.noSummer && x.noWinter ? 'chybí letní i zimní DOT' : x.noSummer ? 'chybí letní DOT' : 'chybí zimní DOT'}`);
-        const more = missing.length > 5 ? ` (+${missing.length - 5} dalších)` : '';
-        const payload = { title: 'Neúplná DOT evidence', body: lines.join(' · ') + more, tag: 'dot-incomplete', url: '/?tab=fleet' };
-        const result = await sendToUsers(users.map((u) => u.id), payload);
-        if (result.sent > 0 || result.devices > 0) {
-          for (const x of missing) state.lastSent[x.key] = now;
-          await appendNotificationLog({ type: 'automatic_incomplete', title: payload.title, body: payload.body, recipient: s.incompleteRecipients || 'workers', ...result });
-          await appendAudit(`Automatické upozornění na neúplnou evidenci (${missing.length} aut)`, { ...result, cars: missing.map((x) => x.car.id) });
-          results.push({ type: 'incomplete', count: missing.length, ...result });
-        }
+        if (now - lastSent < repeatMs) continue;
+        const body = noSummer && noWinter ? 'Chybí letní i zimní DOT.' : noSummer ? 'Chybí letní DOT.' : 'Chybí zimní DOT.';
+        const n = await createNotification({
+          type: 'automatic_incomplete', title: 'Neúplná DOT evidence – ' + car.plate, body,
+          recipient: s.incompleteRecipients || 'workers', recipientUserIds: users.map((u) => u.id), carId: car.id, carPlate: car.plate, byUserId: 'system', byUserName: 'Systém',
+        });
+        const result = await sendToUsers(users.map((u) => u.id), { title: n.title, body: n.body, tag: 'notification-' + n.id, url: '/?notification=' + encodeURIComponent(n.id) });
+        await patchNotification(n.id, result);
+        state.lastSent[key] = now;
+        await appendAudit('Automatické upozornění na neúplnou evidenci ' + car.plate, { notificationId: n.id, carId: car.id, ...result });
+        results.push({ type: 'incomplete', carId: car.id, ...result });
       }
     }
 
     if (s.adminAnomalyEnabled) {
+      const admins = cfg.users.filter((u) => u.active && u.role === 'admin');
       const issues = mileageIssues(cfg, recs);
-      const key = `adminAnomaly:${issues.join('|')}`;
-      const last = Number(state.lastSent[key] || 0);
-      const repeatMs = Math.max(1, Number(s.adminAnomalyRepeatDays || 3)) * 86400000;
-      if (issues.length && now - last >= repeatMs) {
-        const admins = cfg.users.filter((u) => u.active && u.role === 'admin');
-        const body = issues.slice(0, 5).join(' · ') + (issues.length > 5 ? ` (+${issues.length - 5} dalších)` : '');
-        const payload = { title: 'Podezřelý stav kilometrů', body, tag: 'dot-anomaly', url: '/?tab=admin' };
-        const result = await sendToUsers(admins.map((u) => u.id), payload);
-        if (result.sent > 0 || result.devices > 0) {
-          state.lastSent[key] = now;
-          await appendNotificationLog({ type: 'automatic_anomaly', title: payload.title, body, recipient: 'admins', ...result });
-          await appendAudit(`Automatické upozornění adminovi na pokles km (${issues.length})`, { ...result, issues });
-          results.push({ type: 'anomaly', count: issues.length, ...result });
-        }
+      for (const issue of issues) {
+        const key = 'adminAnomaly:' + issue.carId + ':' + issue.from + ':' + issue.to;
+        const lastSent = Number(state.lastSent[key] || 0);
+        const repeatMs = Math.max(1, Number(s.adminAnomalyRepeatDays || 3)) * 86400000;
+        if (now - lastSent < repeatMs) continue;
+        const body = 'Pokles km: ' + issue.from + ' → ' + issue.to + ' km.';
+        const n = await createNotification({
+          type: 'automatic_anomaly', title: 'Podezřelý stav kilometrů – ' + issue.plate, body,
+          recipient: 'admins', recipientUserIds: admins.map((u) => u.id), carId: issue.carId, carPlate: issue.plate, byUserId: 'system', byUserName: 'Systém',
+        });
+        const result = await sendToUsers(admins.map((u) => u.id), { title: n.title, body: n.body, tag: 'notification-' + n.id, url: '/?notification=' + encodeURIComponent(n.id) });
+        await patchNotification(n.id, result);
+        state.lastSent[key] = now;
+        await appendAudit('Automatické upozornění na pokles km ' + issue.plate, { notificationId: n.id, carId: issue.carId, issue, ...result });
+        results.push({ type: 'anomaly', carId: issue.carId, ...result });
       }
     }
 
     if (s.staleEnabled) {
+      const admins = cfg.users.filter((u) => u.active && u.role === 'admin');
       const staleDays = Math.max(1, Number(s.staleDays || 365));
-      const stale = cfg.cars.filter((c) => c.active !== false).filter((c) => {
-        const l = latest(recs, c.id);
-        return !l || now - l.ts > staleDays * 86400000;
-      });
-      const key = `stale:${stale.map((c) => c.id).sort().join(',')}:${staleDays}`;
-      const last = Number(state.lastSent[key] || 0);
-      const repeatMs = Math.max(1, Number(s.adminAnomalyRepeatDays || 3)) * 86400000;
-      if (stale.length && now - last >= repeatMs) {
-        const admins = cfg.users.filter((u) => u.active && u.role === 'admin');
-        const body = stale.slice(0, 5).map((c) => c.plate).join(', ') + (stale.length > 5 ? ` (+${stale.length - 5} dalších)` : '');
-        const payload = { title: 'Dlouho neaktualizovaná auta', body: `${body} · limit ${staleDays} dní`, tag: 'dot-stale', url: '/?tab=admin' };
-        const result = await sendToUsers(admins.map((u) => u.id), payload);
-        if (result.sent > 0 || result.devices > 0) {
-          state.lastSent[key] = now;
-          await appendNotificationLog({ type: 'automatic_stale', title: payload.title, body: payload.body, recipient: 'admins', ...result });
-          await appendAudit(`Automatické upozornění na dlouho neaktualizovaná auta (${stale.length})`, { ...result, cars: stale.map((c) => c.id) });
-          results.push({ type: 'stale', count: stale.length, ...result });
-        }
+      for (const car of cfg.cars.filter((x) => x.active !== false)) {
+        const l = latest(recs, car.id);
+        if (l && now - l.ts <= staleDays * 86400000) continue;
+        const key = 'stale:' + car.id + ':' + staleDays;
+        const lastSent = Number(state.lastSent[key] || 0);
+        const repeatMs = Math.max(1, Number(s.adminAnomalyRepeatDays || 3)) * 86400000;
+        if (now - lastSent < repeatMs) continue;
+        const body = l ? 'Poslední záznam je starší než ' + staleDays + ' dní.' : 'Vozidlo zatím nemá žádný DOT záznam.';
+        const n = await createNotification({
+          type: 'automatic_stale', title: 'Neaktualizované vozidlo – ' + car.plate, body,
+          recipient: 'admins', recipientUserIds: admins.map((u) => u.id), carId: car.id, carPlate: car.plate, byUserId: 'system', byUserName: 'Systém',
+        });
+        const result = await sendToUsers(admins.map((u) => u.id), { title: n.title, body: n.body, tag: 'notification-' + n.id, url: '/?notification=' + encodeURIComponent(n.id) });
+        await patchNotification(n.id, result);
+        state.lastSent[key] = now;
+        await appendAudit('Automatické upozornění na neaktualizované vozidlo ' + car.plate, { notificationId: n.id, carId: car.id, ...result });
+        results.push({ type: 'stale', carId: car.id, ...result });
       }
     }
 
