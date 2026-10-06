@@ -61,10 +61,10 @@ async function readConfig() {
   const cfg = {
     version: 1,
     users: [
-      { id: 'u1', name: 'Admin', role: 'admin', pinHash: pinHash('11'), active: true },
-      { id: 'u2', name: 'Pracovník 1', role: 'user', pinHash: pinHash('22'), active: true },
-      { id: 'u3', name: 'Pracovník 2', role: 'user', pinHash: pinHash('33'), active: true },
-      { id: 'u4', name: 'Pracovník 3', role: 'user', pinHash: pinHash('44'), active: true },
+      { id: 'u1', name: 'Admin', role: 'admin', pinHash: pinHash(process.env.INITIAL_ADMIN_PIN), active: true },
+      { id: 'u2', name: 'Pracovník 1', role: 'user', pinHash: pinHash(process.env.INITIAL_USER1_PIN), active: true },
+      { id: 'u3', name: 'Pracovník 2', role: 'user', pinHash: pinHash(process.env.INITIAL_USER2_PIN), active: true },
+      { id: 'u4', name: 'Pracovník 3', role: 'user', pinHash: pinHash(process.env.INITIAL_USER3_PIN), active: true },
     ],
     cars: [],
   };
