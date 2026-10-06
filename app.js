@@ -250,7 +250,7 @@ function openModule(id){
   if(id==='pneu'&&!hasPneuAccess())return;
   if(MODULE_KEYS.includes(id)&&me?.role!=='admin'&&moduleCfg(id).online===false)return showModuleBlocked(id,moduleCfg(id).offlineMessage);
   currentModule=id||'home';
-  if($('moduleBlocked')&&currentModule!=='home')$('moduleBlocked').hidden=true;
+  if($('moduleBlocked'))$('moduleBlocked').hidden=true;
   document.querySelectorAll('.module-screen').forEach(x=>x.classList.toggle('active',x.id===currentModule));
   if(currentModule==='pneu'){
     const active=document.querySelector('#pneu .panel.active')?.id;
@@ -340,7 +340,7 @@ function renderTrafficReport(){
   renderTrafficMap(r);
 }
 async function loadTrafficReport(force=false){
-  if(!tok||trafficLoading||D.transport?.enabled===false)return trafficReport;
+  if(!tok||trafficLoading||D.transport?.enabled===false||(me?.role!=='admin'&&moduleCfg('transport').online===false))return trafficReport;
   trafficLoading=true;renderTrafficReport();
   try{
     trafficReport=await api('trafficReport',{force:!!force});lastTrafficLoad=Date.now();
@@ -670,7 +670,7 @@ async function heartbeat(){
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')markActivity();heartbeat()});
 window.addEventListener('pagehide',()=>{if(!tok)return;fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({action:'heartbeat',visible:false,active:false}),keepalive:true}).catch(()=>{})});
 setInterval(()=>{
-  if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false)return;
+  if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false||(me?.role!=='admin'&&moduleCfg('transport').online===false))return;
   const mins=Math.max(3,Number(D.transport?.pollMinutes||5));
   if(Date.now()-lastTrafficLoad>=mins*60000)loadTrafficReport(false).catch(()=>{});
 },60000);
