@@ -107,11 +107,12 @@ function defaultSystemMessage(mode) {
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
-const MODULE_KEYS = ['service','pneu','transport','maintenance','settings'];
+const MODULE_KEYS = ['vehicleOverview','service','pneu','transport','maintenance','settings'];
 const MODULE_LABELS = {
-  service:'SERVIS', pneu:'PNEU / DOT', transport:'DOPRAVA', maintenance:'ÚDRŽBA', settings:'NASTAVENÍ'
+  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', transport:'DOPRAVA', maintenance:'ÚDRŽBA', settings:'NASTAVENÍ'
 };
 const DEFAULT_MODULES = {
+  vehicleOverview:{ visible:true, online:true, offlineMessage:'Přehled vozidel je dočasně mimo provoz.' },
   service:{ visible:true, online:true, offlineMessage:'Modul SERVIS je dočasně mimo provoz.' },
   pneu:{ visible:true, online:true, offlineMessage:'Modul PNEU / DOT je dočasně mimo provoz.' },
   transport:{ visible:true, online:true, offlineMessage:'Dopravní report je dočasně mimo provoz.' },
@@ -213,6 +214,9 @@ function ip(req) {
 function cleanPlate(v) {
   return String(v || '').toUpperCase().replace(/\s+/g, '').trim().slice(0, 16);
 }
+function cleanVin(v) {
+  return String(v || '').toUpperCase().replace(/\s+/g, '').trim().slice(0, 32);
+}
 function cleanText(v, max = 100) {
   return String(v || '').trim().slice(0, max);
 }
@@ -234,7 +238,7 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 7;
+  cfg.version = 8;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
@@ -258,6 +262,10 @@ function normalizeConfig(cfg) {
     if (c.active === undefined) c.active = true;
     if (!c.createdAt) c.createdAt = null;
     if (!c.updatedAt) c.updatedAt = null;
+    c.vin = cleanVin(c.vin || '');
+    if (!c.lastModifiedAt) c.lastModifiedAt = c.updatedAt || c.createdAt || null;
+    if (!c.lastModifiedBy) c.lastModifiedBy = '';
+    if (!c.lastModifiedById) c.lastModifiedById = null;
   }
   return cfg;
 }
@@ -342,6 +350,42 @@ function enrichRecords(cfg, recs) {
   const byCar = Object.fromEntries(cfg.cars.map((c) => [c.id, c]));
   return recs.map((r) => ({ ...r, userName: byUser[r.userId] || 'Neznámý', plate: byCar[r.carId]?.plate || 'Archiv', vehicle: byCar[r.carId]?.name || '' }));
 }
+function touchCar(car, user, at = new Date().toISOString()) {
+  if (!car) return;
+  car.lastModifiedAt = at;
+  car.lastModifiedBy = user?.name || 'Systém';
+  car.lastModifiedById = user?.id || null;
+}
+function buildVehicleOverview(cfg, recs) {
+  const rows = enrichRecords(cfg, recs);
+  return cfg.cars.map((car) => {
+    const own = rows.filter((r) => r.carId === car.id);
+    const latest = own[0] || null;
+    const summer = own.find((r) => r.season === 'summer') || null;
+    const winter = own.find((r) => r.season === 'winter') || null;
+    const metaTs = car.lastModifiedAt ? new Date(car.lastModifiedAt).getTime() : 0;
+    const recTs = latest?.ts || 0;
+    const lastModifiedBy = metaTs >= recTs ? (car.lastModifiedBy || latest?.userName || '—') : (latest?.userName || car.lastModifiedBy || '—');
+    const lastModifiedAt = metaTs >= recTs ? (car.lastModifiedAt || latest?.createdAt || null) : (latest?.createdAt || car.lastModifiedAt || null);
+    return {
+      id: car.id,
+      plate: car.plate,
+      name: car.name || '',
+      vin: car.vin || '',
+      active: car.active !== false,
+      createdAt: car.createdAt || null,
+      updatedAt: car.updatedAt || null,
+      lastModifiedAt,
+      lastModifiedBy,
+      recordCount: own.length,
+      latestMileage: latest?.mileage ?? null,
+      latestRecordAt: latest?.createdAt || null,
+      latestRecordBy: latest?.userName || null,
+      summer: summer ? { dot:summer.dot, mileage:summer.mileage, createdAt:summer.createdAt, userName:summer.userName } : null,
+      winter: winter ? { dot:winter.dot, mileage:winter.mileage, createdAt:winter.createdAt, userName:winter.userName } : null,
+    };
+  }).sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'cs'));
+}
 function latestRecord(recs, carId, season) {
   return recs.find((r) => r.carId === carId && (!season || r.season === season));
 }
@@ -359,7 +403,7 @@ async function buildVehicleDetail(cfg, recs, carId) {
     id: a.id, createdAt: a.createdAt, actorName: a.actorName, action: a.action, summary: a.summary,
   }));
   return {
-    car: { id: car.id, plate: car.plate, name: car.name, active: car.active !== false, createdAt: car.createdAt, updatedAt: car.updatedAt },
+    car: { id: car.id, plate: car.plate, name: car.name, vin: car.vin || '', active: car.active !== false, createdAt: car.createdAt, updatedAt: car.updatedAt, lastModifiedAt: car.lastModifiedAt || null, lastModifiedBy: car.lastModifiedBy || '' },
     latest: enriched[0] || null,
     latestSummer: enriched.find((r) => r.season === 'summer') || null,
     latestWinter: enriched.find((r) => r.season === 'winter') || null,
@@ -446,6 +490,7 @@ async function publicState(cfg, recs, currentUser) {
     me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
     permissions: perms,
     cars: cfg.cars.filter((c) => c.active !== false),
+    vehicleOverview: buildVehicleOverview(cfg, recs),
     records,
     attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,
@@ -753,6 +798,8 @@ export default async function handler(req, res) {
       if (error) return json(res, 400, { error });
       const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, mileage, userId: currentUser.id };
       await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+      touchCar(car, currentUser, new Date(r.ts).toISOString());
+      await writeConfig(cfg);
       await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${dot} · ${mileage} km`, r);
       return json(res, 200, { ok: true });
     }
@@ -854,6 +901,8 @@ export default async function handler(req, res) {
       const newPath = recordPath(after);
       await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
       if (newPath !== r.path) await del(r.path);
+      touchCar(car, currentUser);
+      await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
     }
@@ -867,6 +916,8 @@ export default async function handler(req, res) {
       if (!r) return json(res, 404, { error: 'RECORD' });
       await del(path);
       const car = cfg.cars.find((c) => c.id === r.carId);
+      touchCar(car, currentUser);
+      await writeConfig(cfg);
       await appendAudit(currentUser, 'record_delete', `Smazán záznam ${car?.plate || ''} DOT ${r.dot} · ${r.mileage} km`, r);
       return json(res, 200, { ok: true });
     }
@@ -907,6 +958,8 @@ export default async function handler(req, res) {
         await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
         await appendAudit(currentUser, 'attention_issue_edit', `Doplněno z upozornění ${car.plate}: ${issue.text}`, { issueKey, record: r });
       }
+      touchCar(car, currentUser);
+      await writeConfig(cfg);
       return json(res, 200, { ok: true });
     }
 
@@ -1038,11 +1091,11 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'adminAddCar') {
-      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80);
+      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80), vin = cleanVin(body.vin);
       if (!plate) return json(res, 400, { error: 'PLATE' });
       if (cfg.cars.some((c) => c.plate === plate)) return json(res, 409, { error: 'DUPLICATE' });
       const now = new Date().toISOString();
-      const car = { id: uid('c'), plate, name, active: true, createdAt: now, updatedAt: now };
+      const car = { id: uid('c'), plate, name, vin, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id };
       cfg.cars.push(car); await writeConfig(cfg);
       await appendAudit(currentUser, 'car_add', `Přidáno auto ${plate} ${name}`, car);
       return json(res, 200, { ok: true });
@@ -1051,20 +1104,20 @@ export default async function handler(req, res) {
     if (body.action === 'adminUpdateCar') {
       const car = cfg.cars.find((c) => c.id === body.carId);
       if (!car) return json(res, 404, { error: 'CAR' });
-      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80);
+      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80), vin = cleanVin(body.vin);
       if (!plate) return json(res, 400, { error: 'PLATE' });
       if (cfg.cars.some((c) => c.id !== car.id && c.plate === plate)) return json(res, 409, { error: 'DUPLICATE' });
-      const before = { plate: car.plate, name: car.name };
-      car.plate = plate; car.name = name; car.updatedAt = new Date().toISOString();
+      const before = { plate: car.plate, name: car.name, vin: car.vin || '' };
+      car.plate = plate; car.name = name; car.vin = vin; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt);
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { carId: car.id, before, after: { carId: car.id, plate, name } });
+      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { carId: car.id, before, after: { carId: car.id, plate, name, vin } });
       return json(res, 200, { ok: true });
     }
 
     if (body.action === 'adminSetCarActive') {
       const car = cfg.cars.find((c) => c.id === body.carId);
       if (!car) return json(res, 404, { error: 'CAR' });
-      car.active = !!body.active; car.updatedAt = new Date().toISOString();
+      car.active = !!body.active; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt);
       await writeConfig(cfg);
       await appendAudit(currentUser, car.active ? 'car_restore' : 'car_archive', `${car.active ? 'Obnoveno' : 'Archivováno'} auto ${car.plate}`, { carId: car.id });
       return json(res, 200, { ok: true });
@@ -1074,7 +1127,7 @@ export default async function handler(req, res) {
       const ids = Array.isArray(body.carIds) ? body.carIds.slice(0, 500) : [];
       const active = !!body.active;
       let n = 0;
-      for (const car of cfg.cars) if (ids.includes(car.id)) { car.active = active; car.updatedAt = new Date().toISOString(); n++; }
+      for (const car of cfg.cars) if (ids.includes(car.id)) { car.active = active; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt); n++; }
       await writeConfig(cfg);
       await appendAudit(currentUser, active ? 'cars_bulk_restore' : 'cars_bulk_archive', `${active ? 'Obnoveno' : 'Archivováno'} ${n} aut`, { carIds: ids });
       return json(res, 200, { ok: true, count: n });
@@ -1086,9 +1139,9 @@ export default async function handler(req, res) {
       const existing = new Set(cfg.cars.map((c) => c.plate));
       const now = new Date().toISOString();
       for (const row of rows) {
-        const plate = cleanPlate(row?.plate), name = cleanText(row?.name, 80);
+        const plate = cleanPlate(row?.plate), name = cleanText(row?.name, 80), vin = cleanVin(row?.vin);
         if (!plate || existing.has(plate)) { skipped++; continue; }
-        cfg.cars.push({ id: uid('c'), plate, name, active: true, createdAt: now, updatedAt: now });
+        cfg.cars.push({ id: uid('c'), plate, name, vin, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id });
         existing.add(plate); added++;
       }
       await writeConfig(cfg);
@@ -1109,6 +1162,8 @@ export default async function handler(req, res) {
       const newPath = recordPath(after);
       await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
       if (newPath !== r.path) await del(r.path);
+      touchCar(car, currentUser);
+      await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
     }
@@ -1120,6 +1175,8 @@ export default async function handler(req, res) {
       const r = recs.find((x) => x.path === path);
       await del(path);
       const car = r ? cfg.cars.find((c) => c.id === r.carId) : null;
+      touchCar(car, currentUser);
+      await writeConfig(cfg);
       await appendAudit(currentUser, 'record_delete', `Smazán záznam ${car?.plate || ''} ${r ? `DOT ${r.dot} · ${r.mileage} km` : ''}`.trim(), r || { path });
       return json(res, 200, { ok: true });
     }
