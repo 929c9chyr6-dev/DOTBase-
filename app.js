@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home';
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
@@ -33,7 +33,7 @@ async function login(){
   }catch(x){note($('loginMsg'),x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':'Špatný kód.','msg err')}
 }
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
-$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;currentModule='home';$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
+$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
 async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')$('lock').click()}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
@@ -66,6 +66,7 @@ async function ensureSW(){if(!('serviceWorker'in navigator))return null;if(swReg
 async function currentSubscription(){try{const reg=await ensureSW();return reg?await reg.pushManager.getSubscription():null}catch{return null}}
 async function updatePushStatus(){
   const status=$('pushStatus'),btn=$('pushToggle');
+  if(!can('notificationsReceive')){status.textContent='Oznámení nejsou pro tento účet povolena administrátorem.';btn.textContent='Oznámení nejsou povolena';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}
   if(!('Notification'in window)||!('PushManager'in window)||!('serviceWorker'in navigator)){status.textContent='Tento prohlížeč push oznámení nepodporuje.';btn.disabled=true;return}
   if(/iPhone|iPad|iPod/.test(navigator.userAgent)&&!matchMedia('(display-mode: standalone)').matches){status.textContent='Na iPhonu nejdřív přidej aplikaci na plochu. Pak půjdou oznámení povolit.';btn.textContent='Nejdřív přidat na plochu';btn.disabled=true;return}
   const sub=await currentSubscription();
@@ -77,14 +78,33 @@ async function updatePushStatus(){
 $('pushToggle').onclick=async()=>{
   try{
     const reg=await ensureSW();let sub=await reg.pushManager.getSubscription();
-    if(sub){const endpoint=sub.endpoint;await sub.unsubscribe();await api('pushUnsubscribe',{endpoint});await updatePushStatus();return}
+    if(sub){const endpoint=sub.endpoint;await sub.unsubscribe();await api('pushUnsubscribe',{endpoint});await updatePushStatus();settingsDevicesLoaded=false;await loadMyPushDevices();return}
     const perm=await Notification.requestPermission();if(perm!=='granted'){await updatePushStatus();return}
     if(!D.push?.publicKey)throw new Error('PUSH_KEY');
     sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64ToBytes(D.push.publicKey)});
-    await api('pushSubscribe',{subscription:sub.toJSON()});await updatePushStatus();
+    await api('pushSubscribe',{subscription:sub.toJSON()});await updatePushStatus();settingsDevicesLoaded=false;await loadMyPushDevices();
   }catch(x){console.error(x);note($('pushStatus'),'Oznámení se nepodařilo zapnout. Zkus aplikaci zavřít a znovu otevřít.','msg err')}
 };
 
+
+function deviceLabel(ua=''){
+  const s=String(ua);
+  let device=/iPhone/i.test(s)?'iPhone':/iPad/i.test(s)?'iPad':/Android/i.test(s)?'Android':/Windows/i.test(s)?'Windows PC':/Macintosh|Mac OS X/i.test(s)?'Mac':'Zařízení';
+  let browser=/Edg\//i.test(s)?'Edge':/CriOS|Chrome\//i.test(s)?'Chrome':/FxiOS|Firefox\//i.test(s)?'Firefox':/Safari\//i.test(s)?'Safari':'Prohlížeč';
+  return device+' · '+browser;
+}
+async function loadMyPushDevices(force=false){
+  if(!$('settingsDevices')||!tok)return;
+  if(settingsDevicesLoaded&&!force)return;
+  $('settingsDevices').innerHTML='<div class="small">Načítám zařízení…</div>';
+  try{
+    const r=await api('myPushDevices'),rows=r.devices||[];
+    settingsDevicesLoaded=true;
+    $('settingsDevices').innerHTML=rows.length?rows.map(d=>'<div class="item"><b>📱 '+e(deviceLabel(d.userAgent))+'</b><div class="small">Push aktivován: '+dt(d.createdAt)+'</div></div>').join(''):'<div class="small">Na žádném zařízení nemáš aktivní push oznámení.</div>';
+  }catch(x){
+    $('settingsDevices').innerHTML='<div class="small">Seznam zařízení se nepodařilo načíst.</div>';
+  }
+}
 
 // Persistent in-app notifications
 function pendingNotifications(){
@@ -178,6 +198,7 @@ function openModule(id){
   }
   if(currentModule==='admin'&&me?.role==='admin')refresh();
   if(currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
+  if(currentModule==='settings'){updatePushStatus();loadMyPushDevices()}
 }
 function renderVehiclePreviews(target,kind){
   const cars=(D.cars||[]).slice(0,80);
@@ -294,7 +315,7 @@ function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?(can('
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
   document.querySelectorAll('.pneu-tabs button').forEach(b=>b.style.display=allowedTab(b.dataset.tab)?'':'none');
-  $('pushCard').style.display=can('notificationsReceive')?'':'none';
+  $('pushCard').style.display='';
   $('fleetFiltersCard').style.display=can('fleetView')?'':'none';
   $('fleetListCard').style.display=can('fleetView')?'':'none';
   if(currentModule==='admin'&&me.role!=='admin')openModule('home');

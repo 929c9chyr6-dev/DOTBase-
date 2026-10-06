@@ -466,6 +466,16 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true });
     }
 
+    if (body.action === 'myPushDevices') {
+      const rows = await getPushStore();
+      const devices = rows.filter((p) => p.userId === currentUser.id).map((p) => ({
+        id: p.id,
+        createdAt: p.createdAt || null,
+        userAgent: cleanText(p.userAgent, 240),
+      })).sort((x, y) => String(y.createdAt || '').localeCompare(String(x.createdAt || '')));
+      return json(res, 200, { devices });
+    }
+
     if (body.action === 'notificationRespond') {
       const notificationId = String(body.notificationId || '');
       const response = String(body.response || '');

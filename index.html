@@ -61,9 +61,32 @@
 
 <section id="settings" class="module-screen">
 <div class="module-head"><div><h2>⚙️ NASTAVENÍ</h2><div class="small">Osobní nastavení aplikace</div></div><button class="back-home">← Domů</button></div>
-<div class="card"><h2>Můj účet</h2><div class="setting-row"><span>Uživatel</span><b id="settingsUser">—</b></div><div class="setting-row"><span>Role</span><b id="settingsRole">—</b></div></div>
-<div id="pushCard" class="card push-card"><div class="step">🔔 Oznámení</div><div id="pushStatus" class="small">Kontroluji podporu oznámení…</div><button id="pushToggle" class="secondary" style="width:100%;margin-top:9px">Povolit oznámení</button></div>
-<div class="card"><h2>Další nastavení</h2><div class="small">Vzhled, zařízení a další osobní volby sem můžeme přidávat postupně.</div></div>
+
+<div id="pushCard" class="card push-card">
+<h2>🔔 Oznámení</h2>
+<div id="pushStatus" class="small">Kontroluji podporu oznámení…</div>
+<button id="pushToggle" class="secondary" style="width:100%;margin-top:9px">Povolit oznámení</button>
+</div>
+
+<div class="card">
+<h2>🎨 Vzhled</h2>
+<div class="setting-row"><span>Aktuální režim</span><b>Světlý</b></div>
+<div class="setting-row"><span>Tmavý režim</span><span class="badge">Připravujeme</span></div>
+<div class="small" style="margin-top:8px">Přepínání světlého a tmavého vzhledu doplníme později.</div>
+</div>
+
+<div class="card">
+<h2>📱 Zařízení</h2>
+<div class="small" style="margin-bottom:6px">Zařízení, na kterých máš aktivované push oznámení.</div>
+<div id="settingsDevices"><div class="small">Načítám zařízení…</div></div>
+</div>
+
+<div class="card">
+<h2>👤 Můj účet</h2>
+<div class="setting-row"><span>Jméno</span><b id="settingsUser">—</b></div>
+<div class="setting-row"><span>Role</span><b id="settingsRole">—</b></div>
+<div class="small" style="margin-top:8px">Údaje jsou pouze ke čtení. PIN a změny účtu spravuje administrátor.</div>
+</div>
 </section>
 
 <section id="admin" class="module-screen">
