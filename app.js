@@ -23,7 +23,7 @@ themeMedia.addEventListener?.('change',()=>{if(themePreference()==='system')appl
 async function api(action,p={}){
   const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',...(tok?{Authorization:'Bearer '+tok}:{})},body:JSON.stringify({action,...p})});
   const j=await r.json().catch(()=>({error:'SERVER'}));
-  if(!r.ok){const x=new Error(j.error);x.code=j.error;x.data=j;if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp('🔧 Probíhá technická údržba. '+(j.message||'Aplikace je dočasně pozastavena administrátorem.'),'msg warn'),0);throw x}return j;
+  if(!r.ok){const x=new Error(j.error);x.code=j.error;x.data=j;if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp(j.message||'🔧 Probíhá technická údržba\nAplikace je dočasně pozastavena administrátorem.\nZkuste to prosím později.','msg warn'),0);throw x}return j;
 }
 function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
@@ -50,13 +50,13 @@ async function login(){
     else if(['service','pneu','maintenance','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
-    const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?'🔧 Probíhá technická údržba. '+errorText(x):'Špatný kód.';
+    const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?errorText(x):'Špatný kód.';
     note($('loginMsg'),msg,x.code==='MAINTENANCE'?'msg warn':'msg err');
   }
 }
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
 $('lock').onclick=()=>lockApp();
-async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp('🔧 Probíhá technická údržba. '+errorText(x),'msg warn')}}
+async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn')}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
 function valid(){
@@ -255,17 +255,35 @@ function renderSystemBanner(){
     $('systemBannerText').textContent=(s.message||'Aplikace je momentálně dočasně pozastavena administrátorem.')+(me?.role==='admin'?' Ostatní uživatelé se nemohou přihlásit.':'');
   }
 }
+const SYSTEM_MESSAGE_TEMPLATES={
+  read_only:'Probíhá systémová údržba.\nData lze prohlížet, ale zápisy jsou dočasně pozastavené.',
+  maintenance:'🔧 Probíhá technická údržba\nAplikace je momentálně dočasně pozastavena administrátorem.\nZkuste to prosím později.'
+};
+const NORMAL_RETURN_TEMPLATE='Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
 function systemModeHelp(mode){
   if(mode==='read_only')return '<b>🟠 READ ONLY</b>Ostatní uživatelé mohou data prohlížet, ale server odmítne zápisy, úpravy a mazání.';
   if(mode==='maintenance')return '<b>🔴 MAINTENANCE</b>Do aplikace se dostane pouze Admin. Již přihlášení uživatelé budou při dalším spojení odhlášeni.';
   return '<b>🟢 NORMAL</b>Všichni uživatelé pracují podle svých rolí a oprávnění.';
+}
+function updateSystemModeEditor(resetNotify=false){
+  if(!$('systemMode'))return;
+  const selected=$('systemMode').value,current=D.system?.mode||'normal',toNormal=selected==='normal'&&current!=='normal';
+  $('systemModeHelp').innerHTML=systemModeHelp(selected);
+  $('systemRestrictionMessage').hidden=selected==='normal';
+  $('normalNotifyBox').hidden=!toNormal;
+  if(toNormal&&resetNotify){
+    $('normalNotify').checked=true;
+    $('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE;
+  }
 }
 function renderSystemControls(){
   if(me?.role!=='admin'||!$('systemMode'))return;
   const s=D.system||{mode:'normal',customMessage:'',message:''};
   $('systemMode').value=s.mode||'normal';
   $('systemMessage').value=s.customMessage??'';
-  $('systemModeHelp').innerHTML=systemModeHelp($('systemMode').value);
+  $('normalNotify').checked=false;
+  $('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE;
+  updateSystemModeEditor(false);
   $('systemModeMeta').textContent=s.updatedAt?'Poslední změna: '+dt(s.updatedAt)+(s.updatedBy?' · '+s.updatedBy:''):'Režim zatím nebyl ručně měněn.';
 }
 
@@ -372,13 +390,27 @@ function applyAccess(){
 function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();applyAccess();renderSystemBanner();renderNoticeOverlay()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
-if($('systemMode'))$('systemMode').onchange=()=>{$('systemModeHelp').innerHTML=systemModeHelp($('systemMode').value)};
+if($('systemMode'))$('systemMode').onchange=()=>updateSystemModeEditor(true);
+if($('useSystemTemplate'))$('useSystemTemplate').onclick=()=>{
+  const mode=$('systemMode').value;
+  if(SYSTEM_MESSAGE_TEMPLATES[mode])$('systemMessage').value=SYSTEM_MESSAGE_TEMPLATES[mode];
+};
+if($('useNormalTemplate'))$('useNormalTemplate').onclick=()=>{$('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE};
 if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
   const mode=$('systemMode').value,message=$('systemMessage').value.trim();
+  const returningToNormal=mode==='normal'&&(D.system?.mode||'normal')!=='normal';
+  const notifyOnNormal=returningToNormal&&$('normalNotify').checked;
+  const normalNotifyMessage=$('normalNotifyMessage').value.trim();
   const label=mode==='normal'?'NORMAL':mode==='read_only'?'READ ONLY':'MAINTENANCE';
-  if(!confirm('Nastavit provozní režim '+label+'?'))return;
+  if(notifyOnNormal&&!normalNotifyMessage)return note($('systemModeMsg'),'Doplň text oznámení pro návrat do NORMAL.','msg err');
+  if(!confirm('Nastavit provozní režim '+label+'?'+(notifyOnNormal?'\nUživatelům se zároveň odešle oznámení.':'')))return;
   $('saveSystemMode').disabled=true;
-  try{await api('adminSetSystemMode',{mode,message});note($('systemModeMsg'),'Provozní režim byl uložen.','msg ok');await refresh()}
+  try{
+    const r=await api('adminSetSystemMode',{mode,message,notifyOnNormal,normalNotifyMessage});
+    let ok='Provozní režim byl uložen.';
+    if(r.notification)ok+=' Oznámení: '+r.notification.sent+'/'+r.notification.devices+' zařízení.';
+    note($('systemModeMsg'),ok,'msg ok');await refresh()
+  }
   catch(x){note($('systemModeMsg'),errorText(x),'msg err')}
   finally{$('saveSystemMode').disabled=false}
 };

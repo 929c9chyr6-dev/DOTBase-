@@ -30,10 +30,11 @@ function systemState(cfg) {
   return s;
 }
 function defaultSystemMessage(mode) {
-  if (mode === 'maintenance') return 'Aplikace je momentálně dočasně pozastavena administrátorem. Zkuste to prosím později.';
-  if (mode === 'read_only') return 'Probíhá systémová údržba. Data lze prohlížet, ale zápisy jsou dočasně pozastavené.';
+  if (mode === 'maintenance') return '🔧 Probíhá technická údržba\nAplikace je momentálně dočasně pozastavena administrátorem.\nZkuste to prosím později.';
+  if (mode === 'read_only') return 'Probíhá systémová údržba.\nData lze prohlížet, ale zápisy jsou dočasně pozastavené.';
   return '';
 }
+const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
 const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','attentionView','attentionEdit','notificationsReceive'];
 const BASE_PERMISSIONS = {
@@ -617,6 +618,9 @@ export default async function handler(req, res) {
       if (!SYSTEM_MODES.includes(mode)) return json(res, 400, { error: 'SYSTEM_MODE' });
       const before = systemState(cfg);
       const message = cleanText(body.message, 300);
+      const returningToNormal = mode === 'normal' && before.mode !== 'normal';
+      const notifyOnNormal = returningToNormal && !!body.notifyOnNormal;
+      const normalNotifyMessage = cleanText(body.normalNotifyMessage, 240) || DEFAULT_NORMAL_RETURN_MESSAGE;
       cfg.system = {
         mode,
         message,
@@ -624,8 +628,36 @@ export default async function handler(req, res) {
         updatedBy: currentUser.name,
       };
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'system_mode', `Provozní režim: ${before.mode} → ${mode}`, { before, after: cfg.system });
-      return json(res, 200, { ok: true, system: { ...cfg.system, message: cfg.system.message || defaultSystemMessage(mode) } });
+
+      let notification = null;
+      if (notifyOnNormal) {
+        const users = cfg.users.filter((u) => u.active && u.role !== 'admin' && hasPermission(u, 'notificationsReceive'));
+        if (users.length) {
+          const n = await createNotification({
+            type: 'system_normal',
+            title: 'Jsme zpátky',
+            body: normalNotifyMessage,
+            recipient: 'workers',
+            recipientUserIds: users.map((u) => u.id),
+            byUserId: currentUser.id,
+            byUserName: currentUser.name,
+          });
+          const result = await sendPushToUsers(cfg, users.map((u) => u.id), {
+            title: n.title,
+            body: n.body,
+            tag: 'notification-' + n.id,
+            url: '/?notification=' + encodeURIComponent(n.id),
+          });
+          await patchNotification(n.id, result);
+          notification = { notificationId: n.id, ...result };
+          await appendAudit(currentUser, 'system_normal_notification', 'Odesláno oznámení o návratu do NORMAL (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, message: normalNotifyMessage, ...result });
+        } else {
+          notification = { sent: 0, failed: 0, devices: 0 };
+        }
+      }
+
+      await appendAudit(currentUser, 'system_mode', `Provozní režim: ${before.mode} → ${mode}`, { before, after: cfg.system, normalNotification: notification });
+      return json(res, 200, { ok: true, system: { ...cfg.system, message: cfg.system.message || defaultSystemMessage(mode) }, notification });
     }
 
     if (body.action === 'adminVehicleDetail') {
