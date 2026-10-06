@@ -2,7 +2,7 @@
 let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now();
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
-const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['notificationsReceive','Přijímat oznámení']];
+const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
 function can(k){return me?.role==='admin'||!!D.permissions?.[k]}
 function roleLabel(r){return ROLE_LABELS[r]||r||'—'}
 
@@ -29,7 +29,7 @@ async function login(){
   }catch(x){note($('loginMsg'),x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':'Špatný kód.','msg err')}
 }
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
-$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;$('noticeOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
+$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
 async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')$('lock').click()}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
@@ -163,7 +163,40 @@ $('exportCsv').onclick=()=>{const recs=filteredRecords();if(!recs.length)return 
 
 // Admin dashboard
 function presenceHtml(u){const s=u.presenceStatus||'offline',label=s==='online'?'Online':s==='standby'?'Standby':'Offline';return '<span class="presence presence-'+s+'"><span class="presence-dot"></span>'+label+'</span>'}
-function renderAdminDashboard(){const d=D.dashboard||{};$('adminStats').innerHTML=[['Aktivní auta',d.activeCars||0],['Kompletní',d.complete||0],['Nekompletní',d.incomplete||0],['Záznamy',d.records||0],['Pokles km',d.anomalyCount||0],['Archivovaná',d.archivedCars||0]].map(([n,v])=>'<div class="stat"><b>'+e(v)+'</b><span class="small">'+e(n)+'</span></div>').join('');$('adminIssues').innerHTML=(d.issues||[]).slice(0,50).map(x=>'<div class="issue"><b>'+e(x.plate)+'</b> '+e(x.vehicle||'')+'<div class="small">'+e(x.text)+'</div></div>').join('')||'<div class="small">Žádné problémy. 🎉</div>';$('adminActivity').innerHTML=(D.users||[]).map(u=>'<div class="item"><div><b>'+e(u.name)+'</b> <span class="badge">'+e(roleLabel(u.role))+'</span> '+presenceHtml(u)+'</div><div class="small">Poslední aktivita: '+dt(u.lastActivityAt)+' · naposledy online: '+dt(u.lastOnlineAt)+' · záznamů: '+u.recordCount+' · push zařízení: '+u.pushDevices+'</div></div>').join('')}
+function attentionIssues(){return D.attentionIssues||D.dashboard?.issues||[]}
+function issueCard(x){
+  return '<div class="issue"><div><b>'+e(x.plate)+'</b> '+e(x.vehicle||'')+'</div><div class="small">'+e(x.text)+'</div>'+(can('attentionEdit')?'<div class="toolbar" style="margin-top:7px"><button class="issue-edit secondary" data-key="'+e(x.key)+'">Upravit</button></div>':'')+'</div>';
+}
+function bindIssueButtons(){document.querySelectorAll('.issue-edit').forEach(b=>b.onclick=()=>{const x=attentionIssues().find(i=>i.key===b.dataset.key);if(x)openIssueEditor(x)})}
+function renderAttention(){
+  const issues=attentionIssues();
+  if($('adminIssues'))$('adminIssues').innerHTML=issues.slice(0,50).map(issueCard).join('')||'<div class="small">Žádné problémy. 🎉</div>';
+  $('fleetAttentionCard').hidden=!can('attentionView');
+  if(can('attentionView'))$('fleetIssues').innerHTML=issues.slice(0,50).map(issueCard).join('')||'<div class="small">Žádné problémy. 🎉</div>';
+  bindIssueButtons();
+}
+function openIssueEditor(x){
+  if(!can('attentionEdit'))return;
+  const forced=x.type==='missing_summer'?'summer':x.type==='missing_winter'?'winter':(x.type==='mileage_drop'?x.season:'');
+  const defaultSeason=forced||x.season||'summer';
+  const seasonOptions='<option value="summer" '+(defaultSeason==='summer'?'selected':'')+'>☀️ Letní</option><option value="winter" '+(defaultSeason==='winter'?'selected':'')+'>❄️ Zimní</option>';
+  $('issueEditOverlay').hidden=false;
+  $('issueEditBox').innerHTML='<h2>⚠️ Upravit upozornění</h2><div class="sub"><b>'+e(x.plate)+'</b> · '+e(x.text)+'</div>'+
+    '<div class="filter-label">Sada</div><select id="issueSeason" '+(forced?'disabled':'')+'>'+seasonOptions+'</select>'+
+    '<div class="filter-label">DOT</div><input id="issueDot" inputmode="numeric" maxlength="4" value="'+e(x.dot||'')+'" placeholder="např. 2426">'+
+    '<div class="filter-label">Kilometry</div><input id="issueMileage" inputmode="numeric" maxlength="7" value="'+e(x.mileage??'')+'" placeholder="např. 128450">'+
+    '<div class="notice-actions"><button id="issueCancel">Zrušit</button><button id="issueSave" class="primary">Uložit opravu</button></div><div id="issueMsg"></div>';
+  $('issueCancel').onclick=()=>{$('issueEditOverlay').hidden=true};
+  $('issueSave').onclick=async()=>{
+    const season=forced||$('issueSeason').value,dot=$('issueDot').value.replace(/\D/g,''),mileage=Number($('issueMileage').value.replace(/\D/g,''));
+    if(!/^\d{4}$/.test(dot)||+dot.slice(0,2)<1||+dot.slice(0,2)>53)return note($('issueMsg'),'Zadej platný čtyřmístný DOT.','msg err');
+    if(!Number.isInteger(mileage)||mileage<0)return note($('issueMsg'),'Zadej platný stav kilometrů.','msg err');
+    $('issueSave').disabled=true;
+    try{await api('attentionSave',{issueKey:x.key,issueType:x.type,carId:x.carId,recordId:x.recordId||null,season,dot,mileage});$('issueEditOverlay').hidden=true;await refresh()}
+    catch(err){$('issueSave').disabled=false;note($('issueMsg'),err.code==='ISSUE_RESOLVED'?'Upozornění už mezitím není aktuální.':errorText(err),'msg err')}
+  };
+}
+function renderAdminDashboard(){const d=D.dashboard||{};$('adminStats').innerHTML=[['Aktivní auta',d.activeCars||0],['Kompletní',d.complete||0],['Nekompletní',d.incomplete||0],['Záznamy',d.records||0],['Pokles km',d.anomalyCount||0],['Archivovaná',d.archivedCars||0]].map(([n,v])=>'<div class="stat"><b>'+e(v)+'</b><span class="small">'+e(n)+'</span></div>').join('');$('adminActivity').innerHTML=(D.users||[]).map(u=>'<div class="item"><div><b>'+e(u.name)+'</b> <span class="badge">'+e(roleLabel(u.role))+'</span> '+presenceHtml(u)+'</div><div class="small">Poslední aktivita: '+dt(u.lastActivityAt)+' · naposledy online: '+dt(u.lastOnlineAt)+' · záznamů: '+u.recordCount+' · push zařízení: '+u.pushDevices+'</div></div>').join('');renderAttention()}
 
 // Admin cars
 $('addCar').onclick=async()=>{const plate=$('newPlate').value.trim(),name=$('newName').value.trim();if(!plate)return;try{await api('adminAddCar',{plate,name});$('newPlate').value=$('newName').value='';await refresh()}catch(x){alert(errorText(x))}};
@@ -219,15 +252,15 @@ $('importCars').onclick=async()=>{const file=$('csvImport').files?.[0];if(!file)
 $('backupJson').onclick=async()=>{try{const data=await api('adminBackup');downloadBlob(JSON.stringify(data,null,2),'application/json;charset=utf-8','DOT-Evidence-Backup-'+new Date().toISOString().slice(0,10)+'.json')}catch(x){alert(errorText(x))}};
 
 function renderAdmin(){renderAdminDashboard();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderAudit()}
-function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?can('fleetView'):id==='history'?can('historyView'):id==='admin'&&me.role==='admin'}
+function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):id==='admin'&&me.role==='admin'}
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
   document.querySelectorAll('.tabs button').forEach(b=>b.style.display=allowedTab(b.dataset.tab)?'':'none');
-  $('pushCard').style.display=can('notificationsReceive')?'':'none';
+  $('pushCard').style.display=can('notificationsReceive')?'':'none';$('fleetFiltersCard').style.display=can('fleetView')?'':'none';$('fleetListCard').style.display=can('fleetView')?'':'none';
   const current=document.querySelector('.panel.active')?.id;
   if(!current||!allowedTab(current)){const first=['entry','fleet','history','admin'].find(allowedTab);if(first)showTab(first,false)}
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();applyAccess();renderNoticeOverlay()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();applyAccess();renderNoticeOverlay()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='admin'||id==='fleet'))refresh()}
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));

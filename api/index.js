@@ -23,7 +23,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   staleDays: 365,
 };
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
-const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','notificationsReceive'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','attentionView','attentionEdit','notificationsReceive'];
 const BASE_PERMISSIONS = {
   dotView: true,
   dotCreate: true,
@@ -34,6 +34,8 @@ const BASE_PERMISSIONS = {
   historyView: true,
   historyExport: true,
   vehicleDetail: false,
+  attentionView: false,
+  attentionEdit: false,
   notificationsReceive: true,
 };
 function normalizeRole(role) {
@@ -246,15 +248,15 @@ function computeIssues(cfg, recs) {
     const s = [...cr].reverse().find((r) => r.season === 'summer');
     const w = [...cr].reverse().find((r) => r.season === 'winter');
     const l = cr.at(-1);
-    if (!s) issues.push({ type: 'missing_summer', carId: c.id, plate: c.plate, vehicle: c.name, text: 'Chybí letní DOT' });
-    if (!w) issues.push({ type: 'missing_winter', carId: c.id, plate: c.plate, vehicle: c.name, text: 'Chybí zimní DOT' });
-    if (!l) issues.push({ type: 'no_record', carId: c.id, plate: c.plate, vehicle: c.name, text: 'Bez jediného záznamu' });
+    if (!s) issues.push({ key: 'missing_summer:' + c.id, type: 'missing_summer', carId: c.id, plate: c.plate, vehicle: c.name, mileage: l?.mileage ?? '', text: 'Chybí letní DOT' });
+    if (!w) issues.push({ key: 'missing_winter:' + c.id, type: 'missing_winter', carId: c.id, plate: c.plate, vehicle: c.name, mileage: l?.mileage ?? '', text: 'Chybí zimní DOT' });
+    if (!l) issues.push({ key: 'no_record:' + c.id, type: 'no_record', carId: c.id, plate: c.plate, vehicle: c.name, mileage: '', text: 'Bez jediného záznamu' });
     if (l && cfg.notificationSettings.staleEnabled && now - l.ts > Number(cfg.notificationSettings.staleDays || 365) * 86400000) {
-      issues.push({ type: 'stale', carId: c.id, plate: c.plate, vehicle: c.name, text: `Poslední záznam starší než ${cfg.notificationSettings.staleDays} dní` });
+      issues.push({ key: 'stale:' + c.id, type: 'stale', carId: c.id, plate: c.plate, vehicle: c.name, recordId: l.id, season: l.season, dot: l.dot, mileage: l.mileage, text: `Poslední záznam starší než ${cfg.notificationSettings.staleDays} dní` });
     }
     for (let i = 1; i < cr.length; i++) {
       if (cr[i].mileage < cr[i - 1].mileage) {
-        issues.push({ type: 'mileage_drop', carId: c.id, plate: c.plate, vehicle: c.name, recordId: cr[i].id, text: `Pokles km: ${cr[i - 1].mileage} → ${cr[i].mileage}` });
+        issues.push({ key: 'mileage_drop:' + cr[i].id, type: 'mileage_drop', carId: c.id, plate: c.plate, vehicle: c.name, recordId: cr[i].id, season: cr[i].season, dot: cr[i].dot, mileage: cr[i].mileage, text: `Pokles km: ${cr[i - 1].mileage} → ${cr[i].mileage}` });
       }
     }
   }
@@ -317,6 +319,7 @@ async function publicState(cfg, recs, currentUser) {
     permissions: perms,
     cars: cfg.cars.filter((c) => c.active !== false),
     records,
+    attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,
     push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
   };
@@ -534,6 +537,38 @@ export default async function handler(req, res) {
       if (!vehicle) return json(res, 404, { error: 'CAR' });
       vehicle.timeline = [];
       return json(res, 200, { ok: true, vehicle });
+    }
+
+    if (body.action === 'attentionSave') {
+      if (!hasPermission(currentUser, 'attentionView') || !hasPermission(currentUser, 'attentionEdit')) return json(res, 403, { error: 'PERMISSION' });
+      const recs = await getRecords();
+      const issueKey = String(body.issueKey || '');
+      const issue = computeIssues(cfg, recs).find((x) => x.key === issueKey && x.carId === String(body.carId || ''));
+      if (!issue) return json(res, 409, { error: 'ISSUE_RESOLVED' });
+      const car = cfg.cars.find((x) => x.id === issue.carId && x.active !== false);
+      if (!car) return json(res, 404, { error: 'CAR' });
+      const forcedSeason = issue.type === 'missing_summer' ? 'summer' : issue.type === 'missing_winter' ? 'winter' : null;
+      const season = forcedSeason || String(body.season || issue.season || '');
+      const dot = String(body.dot || '');
+      const mileage = Number(body.mileage);
+      const error = validateRecordFields(car, season, dot, mileage);
+      if (error) return json(res, 400, { error });
+
+      if (issue.type === 'mileage_drop') {
+        const r = recs.find((x) => x.id === issue.recordId && x.carId === issue.carId);
+        if (!r) return json(res, 409, { error: 'ISSUE_RESOLVED' });
+        const before = { ...r };
+        const after = { ...r, season, dot, mileage };
+        const newPath = recordPath(after);
+        await put(newPath, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+        if (newPath !== r.path) await del(r.path);
+        await appendAudit(currentUser, 'attention_issue_edit', `Opraveno upozornění ${car.plate}: ${issue.text}`, { issueKey, before, after: { ...after, path: newPath } });
+      } else {
+        const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, mileage, userId: currentUser.id };
+        await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+        await appendAudit(currentUser, 'attention_issue_edit', `Doplněno z upozornění ${car.plate}: ${issue.text}`, { issueKey, record: r });
+      }
+      return json(res, 200, { ok: true });
     }
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });

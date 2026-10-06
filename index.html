@@ -20,8 +20,9 @@
 </section>
 
 <section id="fleet" class="panel">
-<div class="card"><div class="step">Filtry aut</div><div class="search-wrap"><span class="search-icon">🔎</span><input id="fleetSearch" type="search" autocomplete="off" placeholder="SPZ nebo název vozidla…"></div><div class="filter-grid"><select id="fleetSeason"><option value="">Všechny sady</option><option value="summer">☀️ Letní</option><option value="winter">❄️ Zimní</option></select><select id="fleetUser"><option value="">Všichni uživatelé</option></select><div><div class="filter-label">Datum od</div><input id="fleetFrom" type="date"></div><div><div class="filter-label">Datum do</div><input id="fleetTo" type="date"></div></div><div class="filter-actions"><button id="clearFleetFilters" class="clear-filters">✕ Vymazat filtry</button></div><div id="fleetCount" class="small count"></div></div>
-<div class="card"><div class="actions"><button id="fleetRefresh">↻ Obnovit</button><button id="fleetExportCsv" class="export">⬇️ Export CSV</button></div><div class="small" style="margin-bottom:6px">Export: SPZ, vozidlo, letní DOT, zimní DOT a poslední kilometry.</div><b>Přehled aut</b><div id="stats" class="small"></div><div id="fleetList"></div></div>
+<div id="fleetAttentionCard" class="card" hidden><h2>⚠️ Vyžaduje pozornost</h2><div id="fleetIssues"></div></div>
+<div id="fleetFiltersCard" class="card"><div class="step">Filtry aut</div><div class="search-wrap"><span class="search-icon">🔎</span><input id="fleetSearch" type="search" autocomplete="off" placeholder="SPZ nebo název vozidla…"></div><div class="filter-grid"><select id="fleetSeason"><option value="">Všechny sady</option><option value="summer">☀️ Letní</option><option value="winter">❄️ Zimní</option></select><select id="fleetUser"><option value="">Všichni uživatelé</option></select><div><div class="filter-label">Datum od</div><input id="fleetFrom" type="date"></div><div><div class="filter-label">Datum do</div><input id="fleetTo" type="date"></div></div><div class="filter-actions"><button id="clearFleetFilters" class="clear-filters">✕ Vymazat filtry</button></div><div id="fleetCount" class="small count"></div></div>
+<div id="fleetListCard" class="card"><div class="actions"><button id="fleetRefresh">↻ Obnovit</button><button id="fleetExportCsv" class="export">⬇️ Export CSV</button></div><div class="small" style="margin-bottom:6px">Export: SPZ, vozidlo, letní DOT, zimní DOT a poslední kilometry.</div><b>Přehled aut</b><div id="stats" class="small"></div><div id="fleetList"></div></div>
 </section>
 
 <section id="history" class="panel">
@@ -68,6 +69,6 @@
 </div>
 </section>
 
-<div id="noticeOverlay" class="modal-backdrop" hidden><div class="modal-card" id="noticeBox"></div></div><nav class="tabs"><button data-tab="entry" class="active">➕ Zápis</button><button data-tab="fleet">🚗 Auta</button><button data-tab="history">🕘 Historie</button><button id="adminTab" data-tab="admin">⚙️ Admin</button></nav>
+<div id="noticeOverlay" class="modal-backdrop" hidden><div class="modal-card" id="noticeBox"></div></div><div id="issueEditOverlay" class="modal-backdrop" hidden><div class="modal-card" id="issueEditBox"></div></div><nav class="tabs"><button data-tab="entry" class="active">➕ Zápis</button><button data-tab="fleet">🚗 Auta</button><button data-tab="history">🕘 Historie</button><button id="adminTab" data-tab="admin">⚙️ Admin</button></nav>
 </main>
 <script src="/app.js" defer></script></body></html>
