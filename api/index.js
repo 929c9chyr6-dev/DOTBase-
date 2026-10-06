@@ -484,7 +484,7 @@ function extractGolemioTrafficEvents(data) {
       const delayMinutes=Math.max(0,Math.round(Number(r?.impact?.delays?.timeValue||0)/60));
       const lanesRestricted=Math.max(0,Number(r?.impact?.numberOfLanesRestricted||0));
       const severity=trafficSeverity(r);
-      const id=cleanText(String(s?.id||'event')+':'+String(r?.version||idx)+':'+String(r?.startTime||r?.situationRecordCreationTime||''),180);
+      const id=cleanText(String(s?.id||'event')+':'+String(idx),180);
       const fingerprint=crypto.createHash('sha1').update(JSON.stringify([r?.type,text,delayMinutes,lanesRestricted,r?.endTime,r?.situationRecordVersionTime])).digest('hex').slice(0,16);
       out.push({
         id, fingerprint, type:String(r?.type||''), typeLabel:trafficTypeLabel(r?.type), text,
@@ -568,7 +568,7 @@ async function maybeNotifyTrafficUser(cfg,user,report) {
   state.users ||= {};
   const us=state.users[user.id]||{events:{}};
   us.events ||= {};
-  const active=selectedTrafficEvents(report,prefs,cfg),activeIds=new Set(active.map((x)=>x.id));
+  const active=selectedTrafficEvents(report,prefs,cfg),reportEventIds=new Set((report.events||[]).map((x)=>x.id));
   let sent=0;
   const now=Date.now(),repeatMs=prefs.repeatMinutes*60000;
   const corridorNames=Object.fromEntries(report.corridors.map((x)=>[x.id,x.name]));
@@ -591,7 +591,7 @@ async function maybeNotifyTrafficUser(cfg,user,report) {
   }
   if(prefs.resolved&&!report.stale){
     for(const [id,prev] of Object.entries(us.events)){
-      if(activeIds.has(id)||!prev.lastSentAt||prev.resolvedSent)continue;
+      if(reportEventIds.has(id)||!prev.lastSentAt||prev.resolvedSent)continue;
       if(now-Number(prev.lastSeenAt||0)>12*60*60*1000)continue;
       const title='✅ Doprava – omezení ukončeno';
       const body=cleanText((prev.corridorName||'Sledovaný úsek')+': předchozí omezení už není v aktuálním dopravním reportu.',240);
