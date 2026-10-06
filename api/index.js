@@ -561,8 +561,11 @@ async function trafficFeed(cfg, force=false) {
     return result;
   }catch(err){
     console.error('traffic feed',err?.message);
-    if(cache?.events)return {...cache,sourceConfigured:true,stale:true,error:'SOURCE_TEMPORARILY_UNAVAILABLE'};
-    return { sourceConfigured:true, source:'NDIC přes Golemio', fetchedAt:null, stale:false, error:'SOURCE_TEMPORARILY_UNAVAILABLE', events:[] };
+    const forbidden=err?.message==='GOLEMIO_403';
+    const unauthorized=err?.message==='GOLEMIO_401';
+    const error=forbidden?'SOURCE_FORBIDDEN':unauthorized?'SOURCE_UNAUTHORIZED':'SOURCE_TEMPORARILY_UNAVAILABLE';
+    if(cache?.events?.length&&!forbidden&&!unauthorized)return {...cache,sourceConfigured:true,stale:true,error};
+    return { sourceConfigured:true, source:'NDIC přes Golemio', fetchedAt:null, stale:false, error, events:[] };
   }
 }
 async function buildTrafficReport(cfg, force=false) {
@@ -573,9 +576,9 @@ async function buildTrafficReport(cfg, force=false) {
     const critical=events.filter((x)=>x.severity==='critical').length;
     return {
       id:corridor.id,name:corridor.name,type:corridor.type,description:corridor.description,notifyAllowed:corridor.notifyAllowed,
-      status:!feed.sourceConfigured?'unknown':critical?'critical':events.length?'warning':'clear',
+      status:(!feed.sourceConfigured||feed.error)?'unknown':critical?'critical':events.length?'warning':'clear',
       eventCount:events.length,criticalCount:critical,
-      summary:!feed.sourceConfigured?'Datový zdroj čeká na připojení.':events[0]?.text||'Bez hlášených omezení.',
+      summary:!feed.sourceConfigured?'Datový zdroj čeká na připojení.':feed.error==='SOURCE_FORBIDDEN'?'API klíč nemá oprávnění k dopravnímu zdroji.':feed.error?'Dopravní data momentálně nejsou dostupná.':events[0]?.text||'Bez hlášených omezení.',
       events,
     };
   });
