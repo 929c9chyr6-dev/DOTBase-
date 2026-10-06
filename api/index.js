@@ -186,7 +186,7 @@ export default async function handler(req, res) {
       const ts = Date.now();
       const id = crypto.randomUUID().replaceAll('-', '').slice(0, 12);
       const path = `records/${[ts, id, car.id, season, dot, mileage, currentUser.id].join('_')}.rec`;
-      await put(path, '', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+      await put(path, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
       return json(res, 200, { ok: true });
     }
 
