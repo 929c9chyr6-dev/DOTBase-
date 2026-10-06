@@ -277,6 +277,8 @@ function trafficDaypart(){
 function trafficHomeText(){
   if(!trafficReport)return 'Dopravní report pro sledované úseky.';
   if(!trafficReport.sourceConfigured)return '⚪ Datový zdroj čeká na připojení';
+  if(trafficReport.error==='SOURCE_FORBIDDEN')return '⚪ Dopravní zdroj vyžaduje další oprávnění';
+  if(trafficReport.error)return '⚪ Dopravní data nejsou dostupná';
   if(trafficReport.summary?.critical)return '🔴 '+trafficReport.summary.critical+' úseků s vážným omezením';
   if(trafficReport.summary?.warning)return '🟠 '+trafficReport.summary.warning+' úseků s omezením';
   return '🟢 Bez hlášených omezení';
@@ -327,7 +329,15 @@ function renderTrafficReport(){
   src.classList.toggle('traffic-source-ok',!!r.sourceConfigured&&!r.error);
   src.classList.toggle('traffic-source-warn',!r.sourceConfigured||!!r.error);
   $('trafficSourceTitle').textContent=r.sourceConfigured?'📡 '+(r.source||'NDIC přes Golemio'):'📡 Dopravní data čekají na připojení';
-  $('trafficSourceText').textContent=!r.sourceConfigured?'Report a sledované úseky jsou připravené. Pro živá data chybí na serveru Golemio API klíč.':r.error?(r.stale?'Zdroj je dočasně nedostupný; zobrazuji poslední uložená data.':'Zdroj je dočasně nedostupný.'):'Aktuální dopravní omezení z NDIC přes server Golemio.';
+  $('trafficSourceText').textContent=!r.sourceConfigured
+    ?'Report a sledované úseky jsou připravené. Pro živá data chybí na serveru Golemio API klíč.'
+    :r.error==='SOURCE_FORBIDDEN'
+      ?'Golemio API klíč je připojený a platný, ale tento účet nemá oprávnění k dopravnímu zdroji Traffic Restrictions / FCD.'
+      :r.error==='SOURCE_UNAUTHORIZED'
+        ?'Golemio API klíč nebyl dopravním zdrojem přijat.'
+        :r.error
+          ?(r.stale?'Zdroj je dočasně nedostupný; zobrazuji poslední uložená data.':'Zdroj je dočasně nedostupný.')
+          :'Aktuální dopravní omezení z NDIC přes server Golemio.';
   $('trafficCorridors').innerHTML=(r.corridors||[]).map(x=>{
     const m=trafficStatusMeta(x.status);
     return '<div class="traffic-corridor traffic-'+m.cls+'"><div class="traffic-corridor-top"><span class="traffic-state-dot"></span><div style="flex:1"><b>'+e(x.name)+'</b><div class="traffic-status-label">'+m.icon+' '+m.label+(x.eventCount?' · '+x.eventCount+' událostí':'')+'</div><div class="small" style="margin-top:4px">'+e(x.summary||x.description||'')+'</div></div></div></div>';
@@ -336,7 +346,7 @@ function renderTrafficReport(){
     const names=(ev.corridorIds||[]).map(id=>r.corridors.find(c=>c.id===id)?.name).filter(Boolean);
     const extra=[ev.delayMinutes?('zdržení cca '+ev.delayMinutes+' min'):'',ev.lanesRestricted?('omezené pruhy: '+ev.lanesRestricted):''].filter(Boolean).join(' · ');
     return '<div class="traffic-event '+(ev.severity==='critical'?'critical':'')+'"><div class="traffic-event-title">'+(ev.severity==='critical'?'🔴':'🟠')+' '+e(ev.typeLabel||'Dopravní omezení')+'</div><div>'+e(ev.text||'')+'</div>'+(extra?'<div class="small" style="margin-top:4px">'+e(extra)+'</div>':'')+(names.length?'<div class="small" style="margin-top:4px">Úsek: '+e(names.join(' · '))+'</div>':'')+'</div>';
-  }).join('')||(r.sourceConfigured?'<div class="small">Na sledovaných úsecích nejsou aktuálně zachycená žádná hlášená omezení.</div>':'<div class="small">Události se zobrazí po připojení živého datového zdroje.</div>');
+  }).join('')||(r.error==='SOURCE_FORBIDDEN'?'<div class="small">Živá dopravní data zatím nejsou dostupná, protože API účet nemá oprávnění k tomuto zdroji.</div>':r.error?'<div class="small">Dopravní data se momentálně nepodařilo načíst.</div>':r.sourceConfigured?'<div class="small">Na sledovaných úsecích nejsou aktuálně zachycená žádná hlášená omezení.</div>':'<div class="small">Události se zobrazí po připojení živého datového zdroje.</div>');
   renderTrafficMap(r);
 }
 async function loadTrafficReport(force=false){
@@ -443,7 +453,7 @@ function renderTransportAdmin(){
   const source=$('trafficAdminSource');
   source.classList.toggle('traffic-source-ok',!!t.sourceConfigured);
   source.classList.toggle('traffic-source-warn',!t.sourceConfigured);
-  $('trafficAdminSourceText').textContent=t.sourceConfigured?'Golemio API je na serveru připojené. Dopravní události se načítají z NDIC přes Golemio.':'Golemio API klíč zatím není v prostředí Vercelu. Modul funguje, ale živá dopravní data se nezačnou načítat, dokud se klíč nepřidá.';
+  $('trafficAdminSourceText').textContent=t.sourceConfigured?'Golemio API klíč je bezpečně uložený na serveru. Přístup ke konkrétním dopravním zdrojům se ověřuje při načtení reportu.':'Golemio API klíč zatím není v prostředí Vercelu. Modul funguje, ale živá dopravní data se nezačnou načítat, dokud se klíč nepřidá.';
   $('transportEnabled').checked=t.enabled!==false;
   $('transportNotificationsEnabled').checked=t.notificationsEnabled!==false;
   $('transportCacheMinutes').value=String(t.cacheMinutes||3);
