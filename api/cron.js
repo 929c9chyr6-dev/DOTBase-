@@ -38,6 +38,7 @@ async function getRecords() {
   }).filter(Boolean).sort((a, b) => b.ts - a.ts);
 }
 function latest(recs, carId, season) { return recs.find((r) => r.carId === carId && (!season || r.season === season)); }
+function canReceiveNotifications(user) { return user?.role === 'admin' || user?.permissions?.notificationsReceive !== false; }
 async function getNotificationLog() { return await readJson('notifications.json', []); }
 async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
 function nid(prefix = 'n') { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
@@ -107,7 +108,7 @@ export default async function handler(req, res) {
     const results = [];
 
     if (s.incompleteEnabled) {
-      const users = cfg.users.filter((u) => u.active && (s.incompleteRecipients === 'all' || u.role !== 'admin'));
+      const users = cfg.users.filter((u) => u.active && canReceiveNotifications(u) && (s.incompleteRecipients === 'all' || u.role !== 'admin'));
       for (const car of cfg.cars.filter((x) => x.active !== false)) {
         const noSummer = !!s.incompleteMissingSummer && !latest(recs, car.id, 'summer');
         const noWinter = !!s.incompleteMissingWinter && !latest(recs, car.id, 'winter');

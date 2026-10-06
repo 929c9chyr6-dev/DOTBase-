@@ -22,6 +22,32 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   staleEnabled: false,
   staleDays: 365,
 };
+const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','notificationsReceive'];
+const BASE_PERMISSIONS = {
+  dotView: true,
+  dotCreate: true,
+  dotEdit: false,
+  dotDelete: false,
+  fleetView: true,
+  fleetExport: true,
+  historyView: true,
+  historyExport: true,
+  vehicleDetail: false,
+  notificationsReceive: true,
+};
+function normalizeRole(role) {
+  if (role === 'admin') return 'admin';
+  if (role === 'user') return 'driver';
+  return NON_ADMIN_ROLES.includes(role) ? role : 'driver';
+}
+function effectivePermissions(user) {
+  if (user?.role === 'admin') return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
+  const out = { ...BASE_PERMISSIONS };
+  for (const k of PERMISSION_KEYS) if (typeof user?.permissions?.[k] === 'boolean') out[k] = user.permissions[k];
+  return out;
+}
+function hasPermission(user, key) { return user?.role === 'admin' || !!effectivePermissions(user)[key]; }
 
 function json(res, status, body) {
   res.status(status).setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -82,7 +108,7 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 3;
+  cfg.version = 4;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
@@ -90,6 +116,13 @@ function normalizeConfig(cfg) {
     if (u.active === undefined) u.active = true;
     if (!u.createdAt) u.createdAt = null;
     if (!u.lastLoginAt) u.lastLoginAt = null;
+    u.role = normalizeRole(u.role);
+    if (u.role !== 'admin') {
+      u.permissions ||= {};
+      for (const k of Object.keys(u.permissions)) if (!PERMISSION_KEYS.includes(k) || typeof u.permissions[k] !== 'boolean') delete u.permissions[k];
+    } else {
+      delete u.permissions;
+    }
   }
   for (const c of cfg.cars) {
     if (c.active === undefined) c.active = true;
@@ -140,6 +173,18 @@ async function appendAudit(actor, action, summary, details = null) {
 }
 async function getPushStore() { return await readJson('push.json', []); }
 async function writePushStore(rows) { await writeJson('push.json', rows.slice(0, 1000)); }
+async function getPresence() { return await readJson('presence.json', {}); }
+async function writePresence(rows) { await writeJson('presence.json', rows); }
+function presenceFor(userId, presence, now = Date.now()) {
+  const p = presence?.[userId] || {};
+  const heartbeat = p.lastHeartbeatAt ? new Date(p.lastHeartbeatAt).getTime() : 0;
+  const activity = p.lastActivityAt ? new Date(p.lastActivityAt).getTime() : 0;
+  let status = 'offline';
+  if (heartbeat && now - heartbeat <= 180000) {
+    status = p.visible && p.active && activity && now - activity <= 120000 ? 'online' : 'standby';
+  }
+  return { status, lastOnlineAt: p.lastHeartbeatAt || null, lastActivityAt: p.lastActivityAt || null };
+}
 async function getNotificationLog() { return await readJson('notifications.json', []); }
 async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
 async function createNotification(row) {
@@ -230,40 +275,56 @@ function dashboard(cfg, recs) {
     issues: issues.slice(0, 100),
   };
 }
-function userStats(cfg, recs, pushes) {
+function compactRecordsForPermissions(records, perms) {
+  if (perms.historyView) return records;
+  if (!(perms.fleetView || perms.dotView || perms.dotCreate || perms.dotEdit || perms.dotDelete)) return [];
+  const seen = new Set(), out = [];
+  for (const r of records) {
+    for (const key of [r.carId + ':latest', r.carId + ':' + r.season]) {
+      if (!seen.has(key)) { seen.add(key); out.push(r); }
+    }
+  }
+  return [...new Map(out.map((r) => [r.path, r])).values()].sort((a,b)=>b.ts-a.ts);
+}
+function userStats(cfg, recs, pushes, presence) {
   return cfg.users.map((u) => {
     const own = recs.filter((r) => r.userId === u.id);
+    const p = presenceFor(u.id, presence);
     return {
       id: u.id, name: u.name, role: u.role, active: u.active, createdAt: u.createdAt || null,
       lastLoginAt: u.lastLoginAt || null, recordCount: own.length, lastRecordAt: own[0]?.createdAt || null,
-      pushDevices: pushes.filter((p) => p.userId === u.id).length,
+      pushDevices: pushes.filter((x) => x.userId === u.id).length,
+      permissions: effectivePermissions(u),
+      presenceStatus: p.status, lastOnlineAt: p.lastOnlineAt, lastActivityAt: p.lastActivityAt,
     };
   });
 }
-async function publicState(cfg, recs, session) {
-  const baseUsers = cfg.users.map((u) => ({ id: u.id, name: u.name, role: u.role, active: u.active }));
-  const records = enrichRecords(cfg, recs);
+async function publicState(cfg, recs, currentUser) {
+  const perms = effectivePermissions(currentUser);
+  const allRecords = enrichRecords(cfg, recs);
+  const records = currentUser.role === 'admin' ? allRecords : compactRecordsForPermissions(allRecords, perms);
   const notifications = await getNotificationLog();
   const carById = Object.fromEntries(cfg.cars.map((c) => [c.id, c]));
   const pendingNotifications = notifications.filter((n) =>
-    Array.isArray(n.recipientUserIds) && n.recipientUserIds.includes(session.uid) &&
-    !(n.acks || []).some((a) => a.userId === session.uid)
+    Array.isArray(n.recipientUserIds) && n.recipientUserIds.includes(currentUser.id) &&
+    !(n.acks || []).some((a) => a.userId === currentUser.id)
   ).map((n) => ({
     id: n.id, type: n.type, title: n.title, body: n.body, createdAt: n.createdAt,
     carId: n.carId || null, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '',
   }));
   const base = {
-    me: baseUsers.find((u) => u.id === session.uid),
+    me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
+    permissions: perms,
     cars: cfg.cars.filter((c) => c.active !== false),
     records,
     pendingNotifications,
-    push: { publicKey: VAPID_PUBLIC_KEY },
+    push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
   };
-  if (session.role !== 'admin') return base;
-  const [audit, pushes] = await Promise.all([getAudit(), getPushStore()]);
+  if (currentUser.role !== 'admin') return base;
+  const [audit, pushes, presence] = await Promise.all([getAudit(), getPushStore(), getPresence()]);
   return {
     ...base,
-    users: userStats(cfg, recs, pushes),
+    users: userStats(cfg, recs, pushes, presence),
     allCars: cfg.cars,
     dashboard: dashboard(cfg, recs),
     audit: audit.slice(0, 200),
@@ -351,9 +412,24 @@ export default async function handler(req, res) {
     const currentUser = cfg.users.find((x) => x.id === session.uid && x.active);
     if (!currentUser) return json(res, 401, { error: 'AUTH' });
 
-    if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), session));
+    if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), currentUser));
+
+    if (body.action === 'heartbeat') {
+      const presence = await getPresence();
+      const now = new Date().toISOString();
+      const previous = presence[currentUser.id] || {};
+      presence[currentUser.id] = {
+        lastHeartbeatAt: now,
+        lastActivityAt: body.active ? now : (previous.lastActivityAt || currentUser.lastLoginAt || now),
+        visible: !!body.visible,
+        active: !!body.active,
+      };
+      await writePresence(presence);
+      return json(res, 200, { ok: true });
+    }
 
     if (body.action === 'addRecord') {
+      if (!hasPermission(currentUser, 'dotCreate')) return json(res, 403, { error: 'PERMISSION' });
       const car = cfg.cars.find((c) => c.id === body.carId && c.active !== false);
       const season = String(body.season || ''), dot = String(body.dot || ''), mileage = Number(body.mileage);
       const error = validateRecordFields(car, season, dot, mileage);
@@ -365,6 +441,7 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'pushSubscribe') {
+      if (!hasPermission(currentUser, 'notificationsReceive')) return json(res, 403, { error: 'PERMISSION' });
       if (!body.subscription?.endpoint) return json(res, 400, { error: 'SUBSCRIPTION' });
       let rows = await getPushStore();
       const endpoint = String(body.subscription.endpoint);
@@ -420,7 +497,46 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true });
     }
 
-    if (session.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
+    if (body.action === 'editRecord') {
+      if (!hasPermission(currentUser, 'dotEdit')) return json(res, 403, { error: 'PERMISSION' });
+      const recs = await getRecords();
+      const r = recs.find((x) => x.path === body.path || x.id === body.recordId);
+      if (!r) return json(res, 404, { error: 'RECORD' });
+      const car = cfg.cars.find((c) => c.id === (body.carId || r.carId));
+      const season = String(body.season || r.season), dot = String(body.dot || r.dot), mileage = Number(body.mileage);
+      const error = validateRecordFields(car, season, dot, mileage);
+      if (error) return json(res, 400, { error });
+      const before = { ...r };
+      const after = { ...r, carId: car.id, season, dot, mileage };
+      const newPath = recordPath(after);
+      await put(newPath, '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
+      if (newPath !== r.path) await del(r.path);
+      await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
+      return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'deleteRecord') {
+      if (!hasPermission(currentUser, 'dotDelete')) return json(res, 403, { error: 'PERMISSION' });
+      const path = String(body.path || '');
+      if (!path.startsWith('records/')) return json(res, 400, { error: 'PATH' });
+      const recs = await getRecords();
+      const r = recs.find((x) => x.path === path);
+      if (!r) return json(res, 404, { error: 'RECORD' });
+      await del(path);
+      const car = cfg.cars.find((c) => c.id === r.carId);
+      await appendAudit(currentUser, 'record_delete', `Smazán záznam ${car?.plate || ''} DOT ${r.dot} · ${r.mileage} km`, r);
+      return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'vehicleDetail') {
+      if (!hasPermission(currentUser, 'vehicleDetail')) return json(res, 403, { error: 'PERMISSION' });
+      const vehicle = await buildVehicleDetail(cfg, await getRecords(), String(body.carId || ''));
+      if (!vehicle) return json(res, 404, { error: 'CAR' });
+      vehicle.timeline = [];
+      return json(res, 200, { ok: true, vehicle });
+    }
+
+    if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
 
     if (body.action === 'adminVehicleDetail') {
       const vehicle = await buildVehicleDetail(cfg, await getRecords(), String(body.carId || ''));
@@ -521,7 +637,8 @@ export default async function handler(req, res) {
       if (!/^\d{2}$/.test(pin)) return json(res, 400, { error: 'PIN' });
       const h = pinHash(pin);
       if (cfg.users.some((u) => u.active && safeEqualHex(u.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
-      const u = { id: uid('u'), name, role: 'user', pinHash: h, active: true, createdAt: new Date().toISOString(), lastLoginAt: null };
+      const role = NON_ADMIN_ROLES.includes(body.role) ? body.role : 'driver';
+      const u = { id: uid('u'), name, role, permissions: {}, pinHash: h, active: true, createdAt: new Date().toISOString(), lastLoginAt: null };
       cfg.users.push(u); await writeConfig(cfg);
       await appendAudit(currentUser, 'user_add', `Přidán uživatel ${name}`, { userId: u.id });
       return json(res, 200, { ok: true });
@@ -530,7 +647,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminUpdateUser') {
       const target = cfg.users.find((x) => x.id === body.userId);
       if (!target) return json(res, 404, { error: 'USER' });
-      const before = { name: target.name, active: target.active };
+      const before = { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) };
       const name = cleanText(body.name, 40);
       if (name) target.name = name;
       if (body.pin !== undefined && body.pin !== '') {
@@ -540,9 +657,16 @@ export default async function handler(req, res) {
         if (cfg.users.some((x) => x.id !== target.id && x.active && safeEqualHex(x.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
         target.pinHash = h;
       }
-      if (typeof body.active === 'boolean' && target.role !== 'admin') target.active = body.active;
+      if (target.role !== 'admin') {
+        if (NON_ADMIN_ROLES.includes(body.role)) target.role = body.role;
+        if (body.permissions && typeof body.permissions === 'object') {
+          target.permissions = {};
+          for (const k of PERMISSION_KEYS) if (typeof body.permissions[k] === 'boolean') target.permissions[k] = body.permissions[k];
+        }
+        if (typeof body.active === 'boolean') target.active = body.active;
+      }
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active }, pinChanged: body.pin !== undefined && body.pin !== '' });
+      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) }, pinChanged: body.pin !== undefined && body.pin !== '' });
       return json(res, 200, { ok: true });
     }
 
@@ -578,7 +702,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminSendNotification') {
       const title = cleanText(body.title, 80), message = cleanText(body.message, 240), recipient = String(body.recipient || 'all');
       if (!title || !message) return json(res, 400, { error: 'MESSAGE' });
-      let users = cfg.users.filter((u) => u.active);
+      let users = cfg.users.filter((u) => u.active && hasPermission(u, 'notificationsReceive'));
       if (recipient !== 'all') users = users.filter((u) => u.id === recipient);
       if (!users.length) return json(res, 404, { error: 'USER' });
       const carId = body.carId ? String(body.carId) : null;
@@ -599,7 +723,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminBackup') {
       const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 3, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings });
+      return json(res, 200, { version: 4, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings });
     }
 
     return json(res, 400, { error: 'ACTION' });
