@@ -101,6 +101,7 @@ export default async function handler(req, res) {
     const cfg = cfgRaw || {};
     cfg.users ||= [];
     cfg.cars ||= [];
+    if ((cfg.system?.mode || 'normal') === 'maintenance') return send(res, 200, { ok: true, skipped: 'maintenance' });
     const s = cfg.notificationSettings || {};
     const state = stateRaw || {};
     state.lastSent ||= {};

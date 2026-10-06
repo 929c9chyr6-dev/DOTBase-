@@ -3,7 +3,9 @@ let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,open
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
-function can(k){return me?.role==='admin'||!!D.permissions?.[k]}
+const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','attentionEdit']);
+function isReadOnly(){return me?.role!=='admin'&&D.system?.mode==='read_only'}
+function can(k){if(isReadOnly()&&WRITE_PERMS.has(k))return false;return me?.role==='admin'||!!D.permissions?.[k]}
 function roleLabel(r){return ROLE_LABELS[r]||r||'—'}
 const themeMedia=matchMedia('(prefers-color-scheme: dark)');
 function themePreference(){const p=localStorage.getItem('appTheme')||'system';return ['light','dark','system'].includes(p)?p:'system'}
@@ -21,14 +23,19 @@ themeMedia.addEventListener?.('change',()=>{if(themePreference()==='system')appl
 async function api(action,p={}){
   const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',...(tok?{Authorization:'Bearer '+tok}:{})},body:JSON.stringify({action,...p})});
   const j=await r.json().catch(()=>({error:'SERVER'}));
-  if(!r.ok){const x=new Error(j.error);x.code=j.error;x.data=j;throw x}return j;
+  if(!r.ok){const x=new Error(j.error);x.code=j.error;x.data=j;if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp('🔧 Probíhá technická údržba. '+(j.message||'Aplikace je dočasně pozastavena administrátorem.'),'msg warn'),0);throw x}return j;
 }
 function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.'})[x.code]||'Operace se nepodařila.'}
 
+function lockApp(message='',cls='msg'){
+  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;
+  $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
+  if(message)note($('loginMsg'),message,cls);$('pin').focus();
+}
 async function login(){
   const p=$('pin').value.replace(/\D/g,'').slice(0,2);$('pin').value=p;
   if(p.length!==2)return note($('loginMsg'),'Kód má 2 číslice.','msg err');
@@ -42,11 +49,14 @@ async function login(){
     else if(['entry','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
     else if(['service','pneu','maintenance','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
-  }catch(x){note($('loginMsg'),x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':'Špatný kód.','msg err')}
+  }catch(x){
+    const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?'🔧 Probíhá technická údržba. '+errorText(x):'Špatný kód.';
+    note($('loginMsg'),msg,x.code==='MAINTENANCE'?'msg warn':'msg err');
+  }
 }
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
-$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
-async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')$('lock').click()}}
+$('lock').onclick=()=>lockApp();
+async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp('🔧 Probíhá technická údržba. '+errorText(x),'msg warn')}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
 function valid(){
@@ -78,7 +88,7 @@ async function ensureSW(){if(!('serviceWorker'in navigator))return null;if(swReg
 async function currentSubscription(){try{const reg=await ensureSW();return reg?await reg.pushManager.getSubscription():null}catch{return null}}
 async function updatePushStatus(){
   const status=$('pushStatus'),btn=$('pushToggle');
-  if(!can('notificationsReceive')){status.textContent='Oznámení nejsou pro tento účet povolena administrátorem.';btn.textContent='Oznámení nejsou povolena';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}
+  if(isReadOnly()){status.textContent='Aplikace je v režimu pouze pro čtení. Nastavení oznámení je dočasně zamknuté.';btn.textContent='Dočasně zamčeno';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}if(!can('notificationsReceive')){status.textContent='Oznámení nejsou pro tento účet povolena administrátorem.';btn.textContent='Oznámení nejsou povolena';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}
   if(!('Notification'in window)||!('PushManager'in window)||!('serviceWorker'in navigator)){status.textContent='Tento prohlížeč push oznámení nepodporuje.';btn.disabled=true;return}
   if(/iPhone|iPad|iPod/.test(navigator.userAgent)&&!matchMedia('(display-mode: standalone)').matches){status.textContent='Na iPhonu nejdřív přidej aplikaci na plochu. Pak půjdou oznámení povolit.';btn.textContent='Nejdřív přidat na plochu';btn.disabled=true;return}
   const sub=await currentSubscription();
@@ -233,6 +243,32 @@ function renderModuleShell(){
   if($('homeAttention')){$('homeAttention').hidden=!count;$('homeAttentionText').textContent=count?count+' položek v PNEU / DOT vyžaduje pozornost.':''}
 }
 
+function renderSystemBanner(){
+  const b=$('systemBanner'),s=D.system||{mode:'normal',message:''};
+  if(!b||s.mode==='normal'){if(b)b.hidden=true;return}
+  b.hidden=false;b.classList.toggle('read-only',s.mode==='read_only');b.classList.toggle('maintenance',s.mode==='maintenance');
+  if(s.mode==='read_only'){
+    $('systemBannerTitle').textContent='🟠 READ ONLY — pouze prohlížení';
+    $('systemBannerText').textContent=(s.message||'Probíhá systémová údržba. Data lze prohlížet, ale zápisy jsou dočasně pozastavené.')+(me?.role==='admin'?' Admin má stále plný přístup.':'');
+  }else{
+    $('systemBannerTitle').textContent='🔴 MAINTENANCE — technická údržba';
+    $('systemBannerText').textContent=(s.message||'Aplikace je momentálně dočasně pozastavena administrátorem.')+(me?.role==='admin'?' Ostatní uživatelé se nemohou přihlásit.':'');
+  }
+}
+function systemModeHelp(mode){
+  if(mode==='read_only')return '<b>🟠 READ ONLY</b>Ostatní uživatelé mohou data prohlížet, ale server odmítne zápisy, úpravy a mazání.';
+  if(mode==='maintenance')return '<b>🔴 MAINTENANCE</b>Do aplikace se dostane pouze Admin. Již přihlášení uživatelé budou při dalším spojení odhlášeni.';
+  return '<b>🟢 NORMAL</b>Všichni uživatelé pracují podle svých rolí a oprávnění.';
+}
+function renderSystemControls(){
+  if(me?.role!=='admin'||!$('systemMode'))return;
+  const s=D.system||{mode:'normal',customMessage:'',message:''};
+  $('systemMode').value=s.mode||'normal';
+  $('systemMessage').value=s.customMessage??'';
+  $('systemModeHelp').innerHTML=systemModeHelp($('systemMode').value);
+  $('systemModeMeta').textContent=s.updatedAt?'Poslední změna: '+dt(s.updatedAt)+(s.updatedBy?' · '+s.updatedBy:''):'Režim zatím nebyl ručně měněn.';
+}
+
 // Admin dashboard
 function presenceHtml(u){const s=u.presenceStatus||'offline',label=s==='online'?'Online':s==='standby'?'Standby':'Offline';return '<span class="presence presence-'+s+'"><span class="presence-dot"></span>'+label+'</span>'}
 function attentionIssues(){return D.attentionIssues||D.dashboard?.issues||[]}
@@ -267,7 +303,7 @@ function openIssueEditor(x){
     catch(err){$('issueSave').disabled=false;note($('issueMsg'),err.code==='ISSUE_RESOLVED'?'Upozornění už mezitím není aktuální.':errorText(err),'msg err')}
   };
 }
-function renderAdminDashboard(){const d=D.dashboard||{};$('adminStats').innerHTML=[['Aktivní auta',d.activeCars||0],['Kompletní',d.complete||0],['Nekompletní',d.incomplete||0],['Záznamy',d.records||0],['Pokles km',d.anomalyCount||0],['Archivovaná',d.archivedCars||0]].map(([n,v])=>'<div class="stat"><b>'+e(v)+'</b><span class="small">'+e(n)+'</span></div>').join('');$('adminActivity').innerHTML=(D.users||[]).map(u=>'<div class="item"><div><b>'+e(u.name)+'</b> <span class="badge">'+e(roleLabel(u.role))+'</span> '+presenceHtml(u)+'</div><div class="small">Poslední aktivita: '+dt(u.lastActivityAt)+' · naposledy online: '+dt(u.lastOnlineAt)+' · záznamů: '+u.recordCount+' · push zařízení: '+u.pushDevices+'</div></div>').join('');renderAttention()}
+function renderAdminDashboard(){renderSystemControls();const d=D.dashboard||{};$('adminStats').innerHTML=[['Aktivní auta',d.activeCars||0],['Kompletní',d.complete||0],['Nekompletní',d.incomplete||0],['Záznamy',d.records||0],['Pokles km',d.anomalyCount||0],['Archivovaná',d.archivedCars||0]].map(([n,v])=>'<div class="stat"><b>'+e(v)+'</b><span class="small">'+e(n)+'</span></div>').join('');$('adminActivity').innerHTML=(D.users||[]).map(u=>'<div class="item"><div><b>'+e(u.name)+'</b> <span class="badge">'+e(roleLabel(u.role))+'</span> '+presenceHtml(u)+'</div><div class="small">Poslední aktivita: '+dt(u.lastActivityAt)+' · naposledy online: '+dt(u.lastOnlineAt)+' · záznamů: '+u.recordCount+' · push zařízení: '+u.pushDevices+'</div></div>').join('');renderAttention()}
 
 // Admin cars
 $('addCar').onclick=async()=>{const plate=$('newPlate').value.trim(),name=$('newName').value.trim();if(!plate)return;try{await api('adminAddCar',{plate,name});$('newPlate').value=$('newName').value='';await refresh()}catch(x){alert(errorText(x))}};
@@ -333,9 +369,19 @@ function applyAccess(){
   if(currentModule==='admin'&&me.role!=='admin')openModule('home');
   if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();applyAccess();renderNoticeOverlay()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();applyAccess();renderSystemBanner();renderNoticeOverlay()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
+if($('systemMode'))$('systemMode').onchange=()=>{$('systemModeHelp').innerHTML=systemModeHelp($('systemMode').value)};
+if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
+  const mode=$('systemMode').value,message=$('systemMessage').value.trim();
+  const label=mode==='normal'?'NORMAL':mode==='read_only'?'READ ONLY':'MAINTENANCE';
+  if(!confirm('Nastavit provozní režim '+label+'?'))return;
+  $('saveSystemMode').disabled=true;
+  try{await api('adminSetSystemMode',{mode,message});note($('systemModeMsg'),'Provozní režim byl uložen.','msg ok');await refresh()}
+  catch(x){note($('systemModeMsg'),errorText(x),'msg err')}
+  finally{$('saveSystemMode').disabled=false}
+};
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));

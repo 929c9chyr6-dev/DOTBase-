@@ -22,6 +22,18 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   staleEnabled: false,
   staleDays: 365,
 };
+const SYSTEM_MODES = ['normal', 'read_only', 'maintenance'];
+const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', updatedAt: null, updatedBy: null };
+function systemState(cfg) {
+  const s = { ...DEFAULT_SYSTEM_STATE, ...(cfg.system || {}) };
+  if (!SYSTEM_MODES.includes(s.mode)) s.mode = 'normal';
+  return s;
+}
+function defaultSystemMessage(mode) {
+  if (mode === 'maintenance') return 'Aplikace je momentálně dočasně pozastavena administrátorem. Zkuste to prosím později.';
+  if (mode === 'read_only') return 'Probíhá systémová údržba. Data lze prohlížet, ale zápisy jsou dočasně pozastavené.';
+  return '';
+}
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
 const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','attentionView','attentionEdit','notificationsReceive'];
 const BASE_PERMISSIONS = {
@@ -110,10 +122,11 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 4;
+  cfg.version = 5;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
+  cfg.system = systemState(cfg);
   for (const u of cfg.users) {
     if (u.active === undefined) u.active = true;
     if (!u.createdAt) u.createdAt = null;
@@ -321,6 +334,10 @@ async function publicState(cfg, recs, currentUser) {
     records,
     attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,
+    system: (() => {
+      const s = systemState(cfg);
+      return { mode: s.mode, message: s.message || defaultSystemMessage(s.mode), customMessage: currentUser.role === 'admin' ? (s.message || '') : undefined, updatedAt: s.updatedAt || null, updatedBy: currentUser.role === 'admin' ? (s.updatedBy || null) : null };
+    })(),
     push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
   };
   if (currentUser.role !== 'admin') return base;
@@ -403,6 +420,10 @@ export default async function handler(req, res) {
         return json(res, 401, { error: 'BAD_PIN' });
       }
       attempts.delete(key);
+      const sys = systemState(cfg);
+      if (u.role !== 'admin' && sys.mode === 'maintenance') {
+        return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
+      }
       u.lastLoginAt = new Date().toISOString();
       await writeConfig(cfg);
       const token = sign({ uid: u.id, role: u.role, exp: Date.now() + 12 * 60 * 60 * 1000 });
@@ -414,6 +435,15 @@ export default async function handler(req, res) {
     const cfg = await readConfig();
     const currentUser = cfg.users.find((x) => x.id === session.uid && x.active);
     if (!currentUser) return json(res, 401, { error: 'AUTH' });
+
+    const sys = systemState(cfg);
+    if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
+      return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
+    }
+    const readOnlyAllowed = new Set(['state', 'heartbeat', 'myPushDevices', 'vehicleDetail', 'notificationRespond']);
+    if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
+      return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
+    }
 
     if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), currentUser));
 
@@ -581,6 +611,22 @@ export default async function handler(req, res) {
     }
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
+
+    if (body.action === 'adminSetSystemMode') {
+      const mode = String(body.mode || '');
+      if (!SYSTEM_MODES.includes(mode)) return json(res, 400, { error: 'SYSTEM_MODE' });
+      const before = systemState(cfg);
+      const message = cleanText(body.message, 300);
+      cfg.system = {
+        mode,
+        message,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser.name,
+      };
+      await writeConfig(cfg);
+      await appendAudit(currentUser, 'system_mode', `Provozní režim: ${before.mode} → ${mode}`, { before, after: cfg.system });
+      return json(res, 200, { ok: true, system: { ...cfg.system, message: cfg.system.message || defaultSystemMessage(mode) } });
+    }
 
     if (body.action === 'adminVehicleDetail') {
       const vehicle = await buildVehicleDetail(cfg, await getRecords(), String(body.carId || ''));
@@ -767,7 +813,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminBackup') {
       const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 4, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings });
+      return json(res, 200, { version: 5, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg) });
     }
 
     return json(res, 400, { error: 'ACTION' });
