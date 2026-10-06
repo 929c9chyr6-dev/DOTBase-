@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now();
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home';
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
@@ -25,11 +25,15 @@ async function login(){
     $('pin').value='';
     await refresh();await heartbeat();await updatePushStatus();
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
-    const tab=new URLSearchParams(location.search).get('tab');if(tab&&document.getElementById(tab))showTab(tab);
+    const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
+    if(tab==='admin')openModule('admin');
+    else if(['entry','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
+    else if(['service','pneu','maintenance','settings','admin'].includes(mod))openModule(mod);
+    else openModule('home');
   }catch(x){note($('loginMsg'),x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':'Špatný kód.','msg err')}
 }
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
-$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
+$('lock').onclick=()=>{tok='';me=null;openVehicleDetail=null;currentModule='home';$('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';$('pin').focus()};
 async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')$('lock').click()}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
@@ -161,6 +165,41 @@ function renderHist(){renderHistoryUsers();const recs=filteredRecords(),shown=re
 $('refresh').onclick=refresh;['histSearch','histFrom','histTo'].forEach(id=>$(id).oninput=renderHist);['histSeason','histUser'].forEach(id=>$(id).onchange=renderHist);$('clearFilters').onclick=()=>{$('histSearch').value='';$('histSeason').value='';$('histUser').value='';$('histFrom').value='';$('histTo').value='';renderHist()};
 $('exportCsv').onclick=()=>{const recs=filteredRecords();if(!recs.length)return alert('Filtru neodpovídá žádný záznam.');const rows=[['SPZ','Vozidlo','Sada','DOT','Kilometry','Uživatel','Datum a čas'],...recs.map(r=>[r.plate,r.vehicle,r.season==='summer'?'Letní':'Zimní',r.dot,r.mileage,r.userName,dt(r.createdAt)])];downloadBlob('\uFEFF'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','DOT-Evidence-'+new Date().toISOString().slice(0,10)+'.csv')};
 
+// Modular shell
+function hasPneuAccess(){return ['dotCreate','fleetView','historyView','attentionView'].some(can)}
+function openModule(id){
+  if(id==='admin'&&me?.role!=='admin')return;
+  if(id==='pneu'&&!hasPneuAccess())return;
+  currentModule=id||'home';
+  document.querySelectorAll('.module-screen').forEach(x=>x.classList.toggle('active',x.id===currentModule));
+  if(currentModule==='pneu'){
+    const active=document.querySelector('#pneu .panel.active')?.id;
+    if(!active||!allowedTab(active)){const first=['entry','fleet','history'].find(allowedTab);if(first)showTab(first,false)}
+  }
+  if(currentModule==='admin'&&me?.role==='admin')refresh();
+  if(currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
+}
+function renderVehiclePreviews(target,kind){
+  const cars=(D.cars||[]).slice(0,80);
+  $(target).innerHTML=cars.map(car=>{
+    const l=latest(car.id),s=latest(car.id,'summer'),w=latest(car.id,'winter');
+    const extra=kind==='service'
+      ?'Aktuální km: '+(l?Number(l.mileage).toLocaleString('cs-CZ'):'—')+' · servisní profil doplníme'
+      :'Aktuální km: '+(l?Number(l.mileage).toLocaleString('cs-CZ'):'—')+' · údržbová evidence se připravuje';
+    return '<div class="vehicle-preview"><b>'+e(car.plate)+'</b> '+e(car.name||'')+'<div class="small">'+extra+'</div>'+(kind==='service'?'<div class="small">DOT: ☀️ '+e(s?.dot||'—')+' · ❄️ '+e(w?.dot||'—')+'</div>':'')+'</div>';
+  }).join('')||'<div class="small">Žádná aktivní vozidla.</div>';
+}
+function renderModuleShell(){
+  if($('serviceVehicles'))renderVehiclePreviews('serviceVehicles','service');
+  if($('maintenanceVehicles'))renderVehiclePreviews('maintenanceVehicles','maintenance');
+  if($('settingsUser'))$('settingsUser').textContent=me?.name||'—';
+  if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);
+  if($('homeAdminCard'))$('homeAdminCard').hidden=me?.role!=='admin';
+  document.querySelectorAll('[data-module="pneu"]').forEach(x=>x.hidden=!hasPneuAccess());
+  const count=attentionIssues().length;
+  if($('homeAttention')){$('homeAttention').hidden=!count;$('homeAttentionText').textContent=count?count+' položek v PNEU / DOT vyžaduje pozornost.':''}
+}
+
 // Admin dashboard
 function presenceHtml(u){const s=u.presenceStatus||'offline',label=s==='online'?'Online':s==='standby'?'Standby':'Offline';return '<span class="presence presence-'+s+'"><span class="presence-dot"></span>'+label+'</span>'}
 function attentionIssues(){return D.attentionIssues||D.dashboard?.issues||[]}
@@ -251,18 +290,22 @@ $('importCars').onclick=async()=>{const file=$('csvImport').files?.[0];if(!file)
 $('backupJson').onclick=async()=>{try{const data=await api('adminBackup');downloadBlob(JSON.stringify(data,null,2),'application/json;charset=utf-8','DOT-Evidence-Backup-'+new Date().toISOString().slice(0,10)+'.json')}catch(x){alert(errorText(x))}};
 
 function renderAdmin(){renderAdminDashboard();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderAudit()}
-function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):id==='admin'&&me.role==='admin'}
+function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):false}
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
-  document.querySelectorAll('.tabs button').forEach(b=>b.style.display=allowedTab(b.dataset.tab)?'':'none');
-  $('pushCard').style.display=can('notificationsReceive')?'':'none';$('fleetFiltersCard').style.display=can('fleetView')?'':'none';$('fleetListCard').style.display=can('fleetView')?'':'none';
-  const current=document.querySelector('.panel.active')?.id;
-  if(!current||!allowedTab(current)){const first=['entry','fleet','history','admin'].find(allowedTab);if(first)showTab(first,false)}
+  document.querySelectorAll('.pneu-tabs button').forEach(b=>b.style.display=allowedTab(b.dataset.tab)?'':'none');
+  $('pushCard').style.display=can('notificationsReceive')?'':'none';
+  $('fleetFiltersCard').style.display=can('fleetView')?'':'none';
+  $('fleetListCard').style.display=can('fleetView')?'':'none';
+  if(currentModule==='admin'&&me.role!=='admin')openModule('home');
+  if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();applyAccess();renderNoticeOverlay()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();applyAccess();renderNoticeOverlay()}
 
-function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='admin'||id==='fleet'))refresh()}
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
+document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
+document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
 document.querySelectorAll('.admin-nav-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.admin-nav-btn').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.admin-pane').forEach(p=>p.classList.toggle('active',p.id==='admin-'+b.dataset.admin))});
 
 function markActivity(){lastInteraction=Date.now()}
