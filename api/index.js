@@ -514,9 +514,13 @@ function touchCar(car, user, at = new Date().toISOString()) {
   car.lastModifiedBy = user?.name || 'Systém';
   car.lastModifiedById = user?.id || null;
 }
-function buildVehicleOverview(cfg, recs) {
+function buildVehicleOverview(cfg, recs, tireTasks = []) {
   const rows = enrichRecords(cfg, recs);
   return cfg.cars.map((car) => {
+    const activeTasks=(tireTasks||[])
+      .filter((t)=>t.carId===car.id&&t.status!=='closed')
+      .sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')))
+      .map((t)=>({id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',category:normalizeTireTaskCategory(cfg,t.category)||cleanVehicleCategory(t.category)||''}));
     const own = rows.filter((r) => r.carId === car.id);
     const latest = own[0] || null;
     const summer = own.find((r) => r.season === 'summer') || null;
@@ -540,6 +544,8 @@ function buildVehicleOverview(cfg, recs) {
       latestMileage: latest?.mileage ?? null,
       latestRecordAt: latest?.createdAt || null,
       latestRecordBy: latest?.userName || null,
+      activeTaskCount: activeTasks.length,
+      activeTasks,
       summer: summer ? { dot:summer.dot, dotFront:summer.dotFront||'', dotRear:summer.dotRear||'', splitDot:!!summer.splitDot, mileage:summer.mileage, createdAt:summer.createdAt, userName:summer.userName } : null,
       winter: winter ? { dot:winter.dot, dotFront:winter.dotFront||'', dotRear:winter.dotRear||'', splitDot:!!winter.splitDot, mileage:winter.mileage, createdAt:winter.createdAt, userName:winter.userName } : null,
     };
@@ -665,7 +671,7 @@ async function publicState(cfg, recs, currentUser) {
     permissions: perms,
     vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
     cars: cfg.cars.filter((c) => c.active !== false),
-    vehicleOverview: buildVehicleOverview(cfg, recs),
+    vehicleOverview: buildVehicleOverview(cfg, recs, tireTaskRows),
     tireTasks: (currentUser.role==='admin'||(moduleState(cfg,'tiretask').visible&&moduleState(cfg,'tiretask').online)) ? publicTireTasks(cfg,tireTaskRows) : [],
     tireTaskCapabilities: tireTaskCapabilities(currentUser),
     tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),

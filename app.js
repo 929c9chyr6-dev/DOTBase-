@@ -727,7 +727,7 @@ function renderVehicleOverview(){
   $('vehicleOverviewList').innerHTML=rows.map(v=>{
     const complete=!!v.summer&&!!v.winter;
     return '<div class="vehicle-overview-card">'+
-      '<div class="vehicle-overview-head"><div><div class="vehicle-overview-plate">'+e(v.plate||'—')+'</div><div class="vehicle-overview-name">'+e(v.name||'Bez názvu')+'</div><div class="vehicle-overview-tags"><span class="vehicle-category-badge">'+e(v.category||'BEZ KATEGORIE')+'</span></div><div class="vehicle-overview-vin">VIN: '+e(v.vin||'nezadaný')+'</div></div>'+
+      '<div class="vehicle-overview-head"><div><div class="vehicle-overview-plate">'+e(v.plate||'—')+'</div><div class="vehicle-overview-name">'+e(v.name||'Bez názvu')+'</div><div class="vehicle-overview-tags"><span class="vehicle-category-badge">'+e(v.category||'BEZ KATEGORIE')+'</span>'+(v.activeTaskCount?'<span class="vehicle-task-badge">📋 TIRETASK '+v.activeTaskCount+'</span>':'')+'</div><div class="vehicle-overview-vin">VIN: '+e(v.vin||'nezadaný')+'</div></div>'+
       '<span class="vehicle-overview-status '+(v.active?'':'archived')+'">'+(v.active?'AKTIVNÍ':'ARCHIV')+'</span></div>'+
       '<div class="vehicle-overview-metrics">'+
         '<div class="vehicle-overview-metric"><span>Aktuální stav</span><b>'+(v.latestMileage===null||v.latestMileage===undefined?'—':Number(v.latestMileage).toLocaleString('cs-CZ')+' km')+'</b></div>'+
@@ -736,6 +736,7 @@ function renderVehicleOverview(){
         '<div class="vehicle-overview-metric"><span>Poslední DOT/km</span><b>'+(v.latestRecordAt?dt(v.latestRecordAt):'—')+'</b></div>'+
       '</div>'+
       '<div class="vehicle-overview-dot">'+season('Letní','☀️',v.summer)+season('Zimní','❄️',v.winter)+'</div>'+
+      ((v.activeTasks||[]).length?'<div class="vehicle-task-summary"><div class="vehicle-task-summary-title">📋 Naplánované TIRETASKy</div>'+v.activeTasks.slice(0,3).map(t=>{const sm=tireTaskStatusMeta(t.status);return '<div class="vehicle-task-line"><span>'+sm.icon+' <b>'+e(t.date||'—')+'</b> · '+(t.time?e(t.time):'CELÝ DEN')+'</span><span>'+(t.targetSeason==='winter'?'❄️ Zimní':t.targetSeason==='summer'?'☀️ Letní':'')+'</span></div>'}).join('')+(v.activeTasks.length>3?'<div class="small" style="margin-top:5px">＋ další '+(v.activeTasks.length-3)+' task'+(v.activeTasks.length-3===1?'':'y')+'</div>':'')+'</div>':'')+
       '<div class="vehicle-overview-meta"><div><b>Poslední úprava:</b> '+e(v.lastModifiedBy||'—')+'</div><div class="small">'+dt(v.lastModifiedAt)+'</div><div class="small" style="margin-top:5px">Vozidlo založeno: '+dt(v.createdAt)+'</div></div>'+
       '</div>';
   }).join('')||'<div class="card"><div class="small">'+((q||category)?'Žádné vozidlo neodpovídá zvolenému hledání nebo skupině.':'V evidenci zatím nejsou žádná vozidla.')+'</div></div>';
