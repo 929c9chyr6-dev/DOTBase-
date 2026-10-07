@@ -1349,7 +1349,7 @@ function renderAdminUsers(){
     const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Nastavíš je v Admin → Práva uživatelů a přístup k modulům v Admin → Moduly.</div></div>':'';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
     const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">💾 Uložit účet</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">💾 Uložit účet</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button><button class="delete-user danger-btn" data-id="'+e(u.id)+'">🗑 Smazat uživatele</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
@@ -1359,6 +1359,13 @@ function renderAdminUsers(){
   document.querySelectorAll('.admin-user-profile').forEach(b=>b.onclick=()=>openAdminUserProfile(b.dataset.id));
   document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
+  document.querySelectorAll('.delete-user').forEach(b=>b.onclick=()=>deleteAdminUser(b.dataset.id));
+}
+async function deleteAdminUser(id){
+  const u=(D.users||[]).find(x=>x.id===id);if(!u||u.role==='admin')return;
+  const ok=confirm('Opravdu smazat uživatele '+u.name+'?\\n\\nUživatel se už nebude moct přihlásit ani dostávat nové TASKy. Jeho historické DOT zápisy, dokončené TASKy a audit zůstanou zachované. Aktivní přiřazené TASKy se vrátí mezi nepřiřazené.');
+  if(!ok)return;
+  try{const r=await api('adminDeleteUser',{userId:id});await refresh();alert('Uživatel '+u.name+' byl smazán.'+(r.releasedTasks?' Nepřiřazené aktivní TASKy: '+r.releasedTasks+'.':''))}catch(x){alert(errorText(x))}
 }
 function renderAdminUserPermissions(){
   const root=$('userPermissions');if(!root)return;

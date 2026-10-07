@@ -230,7 +230,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 22;
+  cfg.version = 23;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -246,6 +246,9 @@ function normalizeConfig(cfg) {
     if (u.active === undefined) u.active = true;
     if (!u.createdAt) u.createdAt = null;
     if (!u.lastLoginAt) u.lastLoginAt = null;
+    u.deletedAt = u.deletedAt || null;
+    u.deletedBy = u.deletedBy || '';
+    u.deletedById = u.deletedById || null;
     if(previousVersion<15)u.pinHash=migrateLegacyTwoDigitPinHash(u.pinHash);
     u.role = normalizeRole(u.role);
     u.taskNotifications = normalizeTaskNotifications(u.taskNotifications,u.role);
@@ -629,7 +632,7 @@ function compactRecordsForPermissions(records, perms) {
   return [...new Map(out.map((r) => [r.path, r])).values()].sort((a,b)=>b.ts-a.ts);
 }
 function userStats(cfg, recs, pushes, presence) {
-  return cfg.users.map((u) => {
+  return cfg.users.filter((u)=>!u.deletedAt).map((u) => {
     const own = recs.filter((r) => r.userId === u.id);
     const p = presenceFor(u.id, presence);
     return {
@@ -1754,6 +1757,41 @@ export default async function handler(req, res) {
       cfg.users.push(u); await writeConfig(cfg);
       await appendAudit(currentUser, 'user_add', `Přidán uživatel ${name}`, { userId: u.id });
       return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'adminDeleteUser') {
+      const target=cfg.users.find((x)=>x.id===String(body.userId||''));
+      if(!target)return json(res,404,{error:'USER'});
+      if(target.role==='admin'||target.id===currentUser.id)return json(res,403,{error:'ADMIN_USER_DELETE',message:'Admin účet nelze smazat.'});
+      if(target.deletedAt)return json(res,200,{ok:true,alreadyDeleted:true});
+      const now=new Date().toISOString(),targetName=target.name;
+      const tasks=await getTireTasks();let releasedTasks=0;
+      for(const task of tasks){
+        if(task.assignedToUserId===target.id&&!['completed','closed'].includes(task.status)){
+          task.assignedToUserId=null;
+          task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
+          task.activity=Array.isArray(task.activity)?task.activity:[];
+          task.activity.push({id:uid('ta'),type:'assignee_removed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Přiřazený uživatel '+targetName+' byl smazán; TASK vrácen mezi nepřiřazené.'});
+          task.activity=task.activity.slice(-200);releasedTasks++;
+        }
+      }
+      target.active=false;
+      target.deletedAt=now;target.deletedBy=currentUser.name;target.deletedById=currentUser.id;
+      target.pinHash='';
+      target.pinChangeRequired=null;target.failedPinAttempts=0;target.lastFailedPinAt=null;target.loginLockedAt=null;
+      target.permissions={};target.taskNotifications={accepted:false};target.notificationPrefs={operational:false,adminInfo:false};
+      const modules=normalizeModules(cfg.modules);
+      for(const key of MODULE_KEYS)modules[key].allowedUserIds=(modules[key].allowedUserIds||[]).filter((id)=>id!==target.id);
+      cfg.modules=modules;
+      const [pushes,presence]=await Promise.all([getPushStore(),getPresence()]);
+      await Promise.all([
+        writeConfig(cfg),
+        releasedTasks?writeTireTasks(tasks):Promise.resolve(),
+        writePushStore(pushes.filter((x)=>x.userId!==target.id)),
+        writePresence(Object.fromEntries(Object.entries(presence||{}).filter(([id])=>id!==target.id)))
+      ]);
+      await appendAudit(currentUser,'user_delete',`Smazán uživatel ${targetName}`,{userId:target.id,userName:targetName,releasedTasks,historyPreserved:true});
+      return json(res,200,{ok:true,releasedTasks});
     }
 
     if (body.action === 'adminUpdateUser') {
