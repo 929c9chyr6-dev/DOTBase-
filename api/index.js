@@ -35,6 +35,7 @@ const DEFAULT_TRANSPORT_CORRIDORS = [
 const DEFAULT_TRANSPORT_SETTINGS = {
   enabled: true,
   notificationsEnabled: true,
+  userSettingsVisible: true,
   cacheMinutes: 3,
   pollMinutes: 5,
 };
@@ -62,6 +63,7 @@ function normalizeTransportConfig(raw) {
   return {
     enabled: input.enabled !== false,
     notificationsEnabled: input.notificationsEnabled !== false,
+    userSettingsVisible: input.userSettingsVisible !== false,
     cacheMinutes: Math.min(15, Math.max(1, Number(input.cacheMinutes) || DEFAULT_TRANSPORT_SETTINGS.cacheMinutes)),
     pollMinutes: Math.min(60, Math.max(3, Number(input.pollMinutes) || DEFAULT_TRANSPORT_SETTINGS.pollMinutes)),
     corridors,
@@ -86,6 +88,7 @@ function publicTransportConfig(cfg, user) {
   return {
     enabled: t.enabled,
     notificationsEnabled: t.notificationsEnabled,
+    userSettingsVisible: t.userSettingsVisible,
     pollMinutes: t.pollMinutes,
     sourceConfigured: !!GOLEMIO_API_KEY,
     sourceName: 'NDIC přes Golemio',
@@ -847,6 +850,7 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'saveTransportPrefs') {
+      if (currentUser.role !== 'admin' && normalizeTransportConfig(cfg.transport).userSettingsVisible === false) return json(res,403,{error:'TRAFFIC_PREFS_HIDDEN',message:'Nastavení Dopravního reportu je administrátorem skryté.'});
       currentUser.transportPrefs = normalizeTransportPrefs(body.prefs, cfg.transport);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'transport_prefs', 'Upraveno osobní nastavení Dopravního reportu', currentUser.transportPrefs);
@@ -988,11 +992,12 @@ export default async function handler(req, res) {
         ...cfg.transport,
         enabled: s.enabled !== false,
         notificationsEnabled: s.notificationsEnabled !== false,
+        userSettingsVisible: s.userSettingsVisible !== false,
         cacheMinutes: s.cacheMinutes,
         pollMinutes: s.pollMinutes,
       });
       await writeConfig(cfg);
-      await appendAudit(currentUser,'transport_settings','Upraveno nastavení Dopravního reportu',{enabled:cfg.transport.enabled,notificationsEnabled:cfg.transport.notificationsEnabled,cacheMinutes:cfg.transport.cacheMinutes,pollMinutes:cfg.transport.pollMinutes});
+      await appendAudit(currentUser,'transport_settings','Upraveno nastavení Dopravního reportu',{enabled:cfg.transport.enabled,notificationsEnabled:cfg.transport.notificationsEnabled,userSettingsVisible:cfg.transport.userSettingsVisible,cacheMinutes:cfg.transport.cacheMinutes,pollMinutes:cfg.transport.pollMinutes});
       return json(res,200,{ok:true,transportAdmin:{...cfg.transport,sourceConfigured:!!GOLEMIO_API_KEY,sourceName:'NDIC přes Golemio'}});
     }
 
