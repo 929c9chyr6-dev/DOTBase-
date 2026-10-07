@@ -1,11 +1,12 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const MODULE_META={
   vehicleOverview:{label:'PŘEHLED VOZIDEL',icon:'🚗'},
   service:{label:'SERVIS',icon:'🔧'},
   pneu:{label:'PNEU / DOT',icon:'🛞'},
+  tiretask:{label:'TIRETASK',icon:'📋'},
   transport:{label:'DOPRAVA',icon:'🚦'},
   maintenance:{label:'ÚDRŽBA',icon:'🧽'},
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
@@ -38,7 +39,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;
@@ -56,7 +57,7 @@ async function login(){
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
     if(tab==='admin')openModule('admin');
     else if(['entry','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
-    else if(['vehicleOverview','service','pneu','transport','maintenance','settings','admin'].includes(mod))openModule(mod);
+    else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
     const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?errorText(x):'Špatný kód.';
@@ -88,7 +89,12 @@ $('summer').onclick=()=>setSeason('summer');$('winter').onclick=()=>setSeason('w
 $('save').onclick=async()=>{
   if($('save').disabled)return;const id=$('car').value,km=+$('km').value,l=latest(id);
   if(l&&km<l.mileage&&!confirm('Stav km je nižší než poslední evidovaný. Opravdu uložit?'))return;
-  try{await api('addRecord',{carId:id,season,dot:$('dot').value,mileage:km});$('dot').value='';$('km').value='';season='';$('summer').classList.remove('on');$('winter').classList.remove('on');note($('saveMsg'),'✅ Uloženo a sdíleno online.','msg ok');await refresh();setTimeout(()=>$('saveMsg').innerHTML='',1600)}catch(x){note($('saveMsg'),errorText(x),'msg err')}
+  try{
+    const r=await api('addRecord',{carId:id,season,dot:$('dot').value,mileage:km,tireTaskId:pendingTireTaskId||null});
+    pendingTireTaskId=null;$('dot').value='';$('km').value='';season='';$('summer').classList.remove('on');$('winter').classList.remove('on');
+    note($('saveMsg'),r.tireTaskCompleted?'✅ Uloženo. Navázaný TIRETASK je HOTOVO.':'✅ Uloženo a sdíleno online.','msg ok');
+    await refresh();setTimeout(()=>$('saveMsg').innerHTML='',2200)
+  }catch(x){note($('saveMsg'),errorText(x),'msg err')}
 };
 
 // Push notifications
@@ -259,6 +265,7 @@ function openModule(id){
   }
   if(currentModule==='admin'&&me?.role==='admin')refresh();
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
+  if(currentModule==='tiretask')renderTireTask();
   if(currentModule==='transport'){renderTrafficReport();loadTrafficReport(false).catch(()=>{})}
   if(currentModule==='settings'){updatePushStatus();loadMyPushDevices()}
 }
@@ -381,6 +388,109 @@ function renderTrafficPrefs(force=false){
   $('trafficPrefsCorridors').innerHTML=(t.corridors||[]).map(x=>'<label class="traffic-pref-item"><input class="traffic-pref-corridor" type="checkbox" value="'+e(x.id)+'" '+(selected.has(x.id)?'checked':'')+'><span><b>'+e(x.name)+'</b><span class="small" style="display:block">'+e(x.description||'')+'</span></span></label>').join('')||'<div class="small">Admin zatím nenastavil žádné sledované úseky.</div>';
   document.querySelectorAll('.traffic-pref-corridor').forEach(x=>x.onchange=()=>{trafficPrefsDirty=true});
   updateTrafficRepeatVisibility();
+}
+
+
+function localDateISO(d=new Date()){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day}
+function addDaysISO(base,n){const d=new Date(base+'T12:00:00');d.setDate(d.getDate()+n);return localDateISO(d)}
+function tireTaskCategoryLabel(v){return v==='vip'?'VIP':v==='manager'?'MANAŽER':'POOL'}
+function tireTaskStatusMeta(v){
+  return v==='in_progress'?{label:'ROZPRACOVÁNO',icon:'🔵'}:
+    v==='completed'?{label:'HOTOVO',icon:'🟢'}:
+    v==='problem'?{label:'PROBLÉM',icon:'🔴'}:
+    v==='closed'?{label:'UZAVŘENO',icon:'✅'}:
+    {label:'PLÁNOVÁNO',icon:'⚪'};
+}
+function tireTaskCaps(){return D.tireTaskCapabilities||{view:true,create:false,edit:false,progress:false,comment:true,close:false}}
+function tireTaskRowsForView(){
+  const rows=(D.tireTasks||[]).slice(),today=localDateISO(),tomorrow=addDaysISO(today,1),end=addDaysISO(today,6);
+  if(tireTaskView==='tomorrow')return rows.filter(t=>t.date===tomorrow);
+  if(tireTaskView==='week')return rows.filter(t=>t.date>=today&&t.date<=end);
+  if(tireTaskView==='history')return rows.filter(t=>t.status==='closed'||t.date<today).sort((a,b)=>(String(b.closedAt||b.date)+' '+String(b.time||'')).localeCompare(String(a.closedAt||a.date)+' '+String(a.time||'')));
+  return rows.filter(t=>t.date===today);
+}
+function fillTireTaskCars(){
+  if(!$('tireTaskCar'))return;
+  const cur=$('tireTaskCar').value;
+  $('tireTaskCar').innerHTML='<option value="">Vyber vozidlo…</option>'+(D.cars||[]).map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');
+  if((D.cars||[]).some(c=>c.id===cur))$('tireTaskCar').value=cur;
+}
+function renderTireTask(){
+  if(!$('tireTaskList'))return;
+  const caps=tireTaskCaps(),today=localDateISO();
+  if($('tireTaskCreateCard'))$('tireTaskCreateCard').hidden=!caps.create;
+  fillTireTaskCars();
+  if($('tireTaskDate')&&!$('tireTaskDate').value)$('tireTaskDate').value=today;
+  document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.classList.toggle('active',b.dataset.tiretaskView===tireTaskView));
+  const rows=tireTaskRowsForView();
+  const waiting=rows.filter(t=>t.status==='planned').length;
+  const active=rows.filter(t=>t.status==='in_progress'||t.status==='problem').length;
+  const done=rows.filter(t=>t.status==='completed'||t.status==='closed').length;
+  $('tireTaskStats').innerHTML=
+    '<div class="tiretask-stat"><b>'+rows.length+'</b><span>Celkem</span></div>'+
+    '<div class="tiretask-stat"><b>'+waiting+'</b><span>Čeká</span></div>'+
+    '<div class="tiretask-stat"><b>'+active+'</b><span>Rozpracováno / problém</span></div>'+
+    '<div class="tiretask-stat"><b>'+done+'</b><span>Hotovo</span></div>';
+  $('tireTaskList').innerHTML=rows.map(t=>{
+    const sm=tireTaskStatusMeta(t.status),seasonLabel=t.targetSeason==='winter'?'❄️ ZIMNÍ':'☀️ LETNÍ';
+    const comments=(t.comments||[]).slice(-5).map(x=>'<div class="tiretask-comment"><b>'+e(x.userName||'—')+'</b> <span class="small">'+dt(x.at)+'</span><div>'+e(x.text)+'</div></div>').join('');
+    const activity=(t.activity||[]).slice(-5).reverse().map(x=>'<div>'+dt(x.at)+' · '+e(x.userName||'Systém')+' · '+e(x.text||'')+'</div>').join('');
+    let actions='';
+    if(t.status!=='closed'){
+      if(caps.progress&&t.status!=='completed'){
+        if(t.status!=='in_progress')actions+='<button class="tt-start secondary" data-id="'+e(t.id)+'">▶ Rozpracovat</button>';
+        actions+='<button class="tt-problem danger-btn" data-id="'+e(t.id)+'">⚠ Problém</button>';
+      }
+      if(can('dotCreate')&&t.status!=='completed')actions+='<button class="tt-dot primary" data-id="'+e(t.id)+'">🛞 Zapsat PNEU/DOT</button>';
+      if(caps.edit&&t.status!=='completed')actions+='<button class="tt-edit secondary" data-id="'+e(t.id)+'">Upravit plán</button>';
+      if(caps.close&&t.status==='completed')actions+='<button class="tt-close primary" data-id="'+e(t.id)+'">✅ Uložit / ukončit</button>';
+    }
+    const closeInfo=t.status==='closed'?'<div class="small" style="margin-top:8px"><b>Uzavřel:</b> '+e(t.closedBy||'—')+' · '+dt(t.closedAt)+'</div>':'';
+    const commentForm=t.status!=='closed'&&caps.comment?'<div class="tiretask-comment-form"><input class="tt-comment-input" data-id="'+e(t.id)+'" maxlength="500" placeholder="Doplnit poznámku…"><button class="tt-comment secondary" data-id="'+e(t.id)+'">Přidat</button></div>':'';
+    return '<div class="tiretask-card '+e(t.status)+'">'+
+      '<div class="tiretask-head"><div><div class="tiretask-time">'+e(t.time||'—')+'</div><div class="tiretask-plate">'+e(t.carPlate||'—')+'</div><div class="small">'+e(t.carName||'')+' · '+e(t.date||'')+'</div></div><span class="tiretask-status '+e(t.status)+'">'+sm.icon+' '+sm.label+'</span></div>'+
+      '<div class="tiretask-badges"><span class="tiretask-badge '+e(t.category)+'">'+e(tireTaskCategoryLabel(t.category))+'</span><span class="tiretask-badge '+e(t.targetSeason)+'">'+seasonLabel+'</span></div>'+
+      (t.instructions?'<div class="tiretask-instructions"><b>Instrukce Dispatch</b><div style="margin-top:4px">'+e(t.instructions)+'</div></div>':'')+
+      (t.problemNote?'<div class="tiretask-problem"><b>⚠ Problém</b><div>'+e(t.problemNote)+'</div></div>':'')+
+      (t.completedRecordId?'<div class="tiretask-complete"><b>✅ PNEU/DOT zapsáno</b><div>DOT '+e(t.completedDot||'—')+' · '+Number(t.completedMileage??0).toLocaleString('cs-CZ')+' km</div><div class="small">'+e(t.completedBy||'—')+' · '+dt(t.completedAt)+'</div></div>':'')+
+      (actions?'<div class="toolbar">'+actions+'</div>':'')+
+      '<div class="tiretask-comments"><b>💬 Poznámky '+(t.comments?.length||0)+'</b>'+ (comments||'<div class="small" style="margin-top:5px">Zatím bez poznámek.</div>') +commentForm+'</div>'+
+      (activity?'<details style="margin-top:9px"><summary class="small">Aktivita úkolu</summary><div class="tiretask-activity">'+activity+'</div></details>':'')+closeInfo+
+      '</div>';
+  }).join('')||'<div class="card"><div class="small">Pro tento pohled nejsou žádné TireTasky.</div></div>';
+
+  document.querySelectorAll('.tt-start').forEach(b=>b.onclick=()=>setTireTaskStatus(b.dataset.id,'in_progress'));
+  document.querySelectorAll('.tt-problem').forEach(b=>b.onclick=()=>{const n=prompt('Co je problém?');if(n!==null&&n.trim())setTireTaskStatus(b.dataset.id,'problem',n.trim())});
+  document.querySelectorAll('.tt-dot').forEach(b=>b.onclick=()=>openPneuFromTireTask(b.dataset.id));
+  document.querySelectorAll('.tt-edit').forEach(b=>b.onclick=()=>editTireTask(b.dataset.id));
+  document.querySelectorAll('.tt-close').forEach(b=>b.onclick=()=>closeTireTask(b.dataset.id));
+  document.querySelectorAll('.tt-comment').forEach(b=>b.onclick=()=>addTireTaskComment(b.dataset.id));
+}
+async function setTireTaskStatus(id,status,problemNote=''){
+  try{await api('tireTaskSetStatus',{taskId:id,status,problemNote});await refresh()}catch(x){alert(errorText(x))}
+}
+async function addTireTaskComment(id){
+  const input=document.querySelector('.tt-comment-input[data-id="'+id+'"]'),text=input?.value.trim();
+  if(!text)return;
+  try{await api('tireTaskComment',{taskId:id,text});await refresh()}catch(x){alert(errorText(x))}
+}
+async function closeTireTask(id){
+  if(!confirm('Uzavřít tento TireTask jako dokončený?'))return;
+  try{await api('tireTaskClose',{taskId:id});await refresh()}catch(x){alert(errorText(x))}
+}
+async function editTireTask(id){
+  const t=(D.tireTasks||[]).find(x=>x.id===id);if(!t)return;
+  const date=prompt('Datum YYYY-MM-DD:',t.date);if(date===null)return;
+  const time=prompt('Čas HH:MM:',t.time);if(time===null)return;
+  const instructions=prompt('Instrukce Dispatch:',t.instructions||'');if(instructions===null)return;
+  try{await api('tireTaskUpdate',{taskId:id,date,time,instructions});await refresh()}catch(x){alert(errorText(x))}
+}
+function openPneuFromTireTask(id){
+  const t=(D.tireTasks||[]).find(x=>x.id===id);if(!t)return;
+  pendingTireTaskId=t.id;
+  openModule('pneu');showTab('entry',false);
+  carSearch='';$('carSearch').value='';renderCarOptions(t.carId);$('car').value=t.carId;rememberCar(t.carId);setSeason(t.targetSeason);valid();
+  note($('saveMsg'),'📋 Zápis bude propojen s TIRETASK '+(t.carPlate||'')+' · '+(t.targetSeason==='winter'?'zimní':'letní')+'.','msg');
 }
 
 function renderVehicleOverview(){
@@ -632,7 +742,7 @@ function applyAccess(){
   if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
   if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
@@ -699,6 +809,12 @@ if($('addTrafficCorridor'))$('addTrafficCorridor').onclick=async()=>{
 };
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+if($('createTireTask'))$('createTireTask').onclick=async()=>{
+  const data={date:$('tireTaskDate').value,time:$('tireTaskTime').value,carId:$('tireTaskCar').value,category:$('tireTaskCategory').value,targetSeason:$('tireTaskSeason').value,instructions:$('tireTaskInstructions').value.trim()};
+  if(!data.date||!data.time||!data.carId)return note($('tireTaskCreateMsg'),'Doplň datum, čas a vozidlo.','msg err');
+  try{await api('tireTaskCreate',data);$('tireTaskInstructions').value='';note($('tireTaskCreateMsg'),'TireTask byl vytvořen.','msg ok');tireTaskView=data.date===localDateISO()?'today':data.date===addDaysISO(localDateISO(),1)?'tomorrow':'week';await refresh();setTimeout(()=>$('tireTaskCreateMsg').innerHTML='',1800)}catch(x){note($('tireTaskCreateMsg'),errorText(x),'msg err')}
+};
+document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.onclick=()=>{tireTaskView=b.dataset.tiretaskView;renderTireTask()});
 if($('vehicleOverviewSearch'))$('vehicleOverviewSearch').oninput=renderVehicleOverview;
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
 document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
