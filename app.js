@@ -715,7 +715,7 @@ function renderHomeAssignedTasks(){
   list.innerHTML=rows.slice(0,4).map((t)=>{
     const sm=myTaskStatusMeta(t),season=t.targetSeason==='winter'?'❄️ Zimní':'☀️ Letní';
     return '<button class="home-task-row" data-home-task="'+e(t.id)+'"><span class="home-task-main"><span class="home-task-title">'+e(t.carPlate||'—')+' · '+season+'</span><span class="home-task-meta">'+e(taskDateLabel(t))+' · '+tireTaskTimeLabel(t)+(t.carName?' · '+e(t.carName):'')+'</span></span><span class="home-task-status">'+sm.icon+' '+sm.label+'</span></button>';
-  }).join('')+(rows.length>4?'<div class="small" style="margin-top:7px">＋ další '+(rows.length-4)+' přiřazené TASKy</div>':'');
+  }).join('')+(Number(D.myTaskCount??rows.length)>4?'<div class="small" style="margin-top:7px">＋ další '+(Number(D.myTaskCount??rows.length)-4)+' přiřazené TASKy</div>':'');
   document.querySelectorAll('[data-home-task]').forEach((b)=>b.onclick=()=>openSpecificTask(b.dataset.homeTask));
   if($('homeMyTasksOpen'))$('homeMyTasksOpen').onclick=()=>openModule('tiretask');
 }
