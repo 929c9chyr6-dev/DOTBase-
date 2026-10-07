@@ -164,11 +164,11 @@ function publicModules(cfg,currentUser){
   }]));
 }
 function actionModule(action){
-  if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (['tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
-  if (['vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
+  if (['pneuData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
+  if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
+  if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
-  if (['sendOperationalNotification'].includes(action)) return 'notifications';
+  if (['notificationData','sendOperationalNotification'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
   return null;
 }
@@ -706,64 +706,56 @@ function userStats(cfg, recs, pushes, presence) {
     };
   });
 }
-async function publicState(cfg, recs, currentUser) {
-  const perms = effectivePermissions(currentUser);
-  const syncVersion=await getSyncVersion();
-  const allRecords = enrichRecords(cfg, recs);
-  const records = currentUser.role === 'admin' ? allRecords : compactRecordsForPermissions(allRecords, perms);
-  const [notifications, tireTaskRows] = await Promise.all([getNotificationLog(), getTireTasks()]);
-  const carById = Object.fromEntries(cfg.cars.map((c) => [c.id, c]));
-  const userById = Object.fromEntries(cfg.users.map((u) => [u.id, u]));
-  const notificationRows=notifications
-    .map(normalizeNotificationRecord)
-    .filter((n)=>Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
+function buildNotificationData(cfg,currentUser,notifications,includeInbox=false){
+  const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c]));
+  const userById=Object.fromEntries(cfg.users.map((u)=>[u.id,u]));
+  const rows=(notifications||[]).map(normalizeNotificationRecord).filter((n)=>Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
   const publicNotification=(n)=>{
     const ack=(n.acks||[]).find((a)=>a.userId===currentUser.id)||null;
     const seen=(n.seen||[]).find((a)=>a.userId===currentUser.id)||null;
     return {
       id:n.id,type:n.type,channel:n.channel,severity:n.severity,requiresAck:!!n.requiresAck,title:n.title,body:n.body,createdAt:n.createdAt,
-      expiresAt:n.expiresAt||null,expired:notificationExpired(n),byUserName:n.byUserName||'',byUserRole:n.byUserRole||userById[n.byUserId]?.role||'',carId:n.carId||null,carPlate:n.carId?(carById[n.carId]?.plate||n.carPlate||''):(n.carPlate||''),
+      expiresAt:n.expiresAt||null,expired:notificationExpired(n),byUserName:n.byUserName||'',byUserRole:n.byUserRole||userById[n.byUserId]?.role||'',
+      carId:n.carId||null,carPlate:n.carId?(carById[n.carId]?.plate||n.carPlate||''):(n.carPlate||''),
       acknowledgedAt:ack?.at||null,seenAt:seen?.at||ack?.at||null,read:!!(seen||ack||n.legacyPassive),
     };
   };
   const severityOrder={critical:3,important:2,info:1};
-  const pendingNotifications=notificationRows
-    .filter((n)=>n.requiresAck&&!notificationExpired(n)&&!(n.acks||[]).some((a)=>a.userId===currentUser.id))
-    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
-    .map(publicNotification);
-  const toastNotifications=notificationRows
-    .filter((n)=>!n.requiresAck&&!n.legacyPassive&&!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id))
-    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
-    .map(publicNotification);
-  const notificationInbox=notificationRows.slice(0,150).map(publicNotification);
-  const base = {
+  const pendingNotifications=rows.filter((n)=>n.requiresAck&&!notificationExpired(n)&&!(n.acks||[]).some((a)=>a.userId===currentUser.id))
+    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0)).map(publicNotification);
+  const toastNotifications=rows.filter((n)=>!n.requiresAck&&!n.legacyPassive&&!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id))
+    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0)).map(publicNotification);
+  const unread=rows.filter((n)=>!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id)&&!(n.acks||[]).some((a)=>a.userId===currentUser.id)&&!n.legacyPassive).length;
+  const out={pendingNotifications,toastNotifications,notificationUnreadCount:unread,notificationPrefs:normalizeUserNotificationPrefs(currentUser.notificationPrefs)};
+  if(includeInbox){
+    out.notificationInbox=rows.slice(0,150).map(publicNotification);
+    out.notificationRecipients=hasPermission(currentUser,'notificationsSendOperational')?cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})):[];
+  }
+  return out;
+}
+async function publicState(cfg,recs,currentUser){
+  const perms=effectivePermissions(currentUser),syncVersion=await getSyncVersion();
+  const allRecords=enrichRecords(cfg,recs),compactPerms={...perms,historyView:false};
+  const records=compactRecordsForPermissions(allRecords,compactPerms);
+  const [notifications,tireTaskRows]=await Promise.all([getNotificationLog(),getTireTasks()]);
+  const notice=buildNotificationData(cfg,currentUser,notifications,false);
+  const issues=perms.attentionView?computeIssues(cfg,recs):[];
+  return {
     syncVersion,
-    me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
-    permissions: perms,
-    vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
-    cars: cfg.cars.filter((c) => c.active !== false),
-    vehicleOverview: buildVehicleOverview(cfg, recs, tireTaskRows),
-    seasonRecords: userCanAccessModule(cfg,'pneu',currentUser)&&['dotCreate','fleetView','historyView','attentionView'].some((k)=>perms[k]) ? buildSeasonRecordEvidence(recs) : [],
-    tireTasks: userCanAccessModule(cfg,'tiretask',currentUser) ? publicTireTasks(cfg,tireTaskRows) : [],
-    tireTaskCapabilities: tireTaskCapabilities(currentUser),
-    tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),
-    records,
-    attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
-    pendingNotifications,
-    toastNotifications,
-    notificationInbox,
-    notificationUnreadCount: notificationInbox.filter((n)=>!n.read&&!n.expired).length,
-    notificationPrefs: normalizeUserNotificationPrefs(currentUser.notificationPrefs),
-    notificationRecipients: hasPermission(currentUser,'notificationsSendOperational') ? cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})) : [],
-    system: (() => {
-      const s = systemState(cfg);
-      return { mode: s.mode, message: s.message || defaultSystemMessage(s.mode), customMessage: currentUser.role === 'admin' ? (s.message || '') : undefined, updatedAt: s.updatedAt || null, updatedBy: currentUser.role === 'admin' ? (s.updatedBy || null) : null };
-    })(),
-    transport: publicTransportConfig(cfg, currentUser),
-    modules: publicModules(cfg, currentUser),
-    push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
+    me:{id:currentUser.id,name:currentUser.name,role:currentUser.role,active:currentUser.active},
+    permissions:perms,
+    vehicleCategories:cfg.vehicleCategories||DEFAULT_VEHICLE_CATEGORIES,
+    cars:cfg.cars.filter((c)=>c.active!==false),
+    records,recordTotal:recs.length,
+    taskSummary:{active:tireTaskRows.filter((t)=>t.status!=='closed').length},
+    attentionIssueCount:issues.length,
+    tireTaskCapabilities:tireTaskCapabilities(currentUser),
+    ...notice,
+    system:(()=>{const s=systemState(cfg);return {mode:s.mode,message:s.message||defaultSystemMessage(s.mode),customMessage:currentUser.role==='admin'?(s.message||''):undefined,updatedAt:s.updatedAt||null,updatedBy:currentUser.role==='admin'?(s.updatedBy||null):null}})(),
+    transport:publicTransportConfig(cfg,currentUser),
+    modules:publicModules(cfg,currentUser),
+    push:{publicKey:hasPermission(currentUser,'notificationsReceive')?VAPID_PUBLIC_KEY:''},
   };
-  return base;
 }
 async function publicAdminState(cfg,recs){
   const [audit,pushes,presence,notifications]=await Promise.all([getAudit(),getPushStore(),getPresence(),getNotificationLog()]);
@@ -1155,6 +1147,61 @@ export default async function handler(req, res) {
     if (body.action === 'adminState') {
       if(currentUser.role!=='admin')return json(res,403,{error:'ADMIN'});
       return json(res,200,await publicAdminState(cfg,await getRecords()));
+    }
+    if(body.action==='vehicleOverviewData'){
+      const [recs,tasks]=await Promise.all([getRecords(),getTireTasks()]);
+      return json(res,200,{vehicleOverview:buildVehicleOverview(cfg,recs,tasks)});
+    }
+    if(body.action==='pneuData'){
+      const perms=effectivePermissions(currentUser);
+      const [recs,tasks]=await Promise.all([getRecords(),getTireTasks()]);
+      const compact=compactRecordsForPermissions(enrichRecords(cfg,recs),{...perms,historyView:false});
+      const issues=perms.attentionView?computeIssues(cfg,recs):[];
+      const pneuTasks=(tasks||[]).filter((t)=>t.status!=='closed').map((t)=>({
+        id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carId:t.carId||'',
+        category:normalizeTireTaskCategory(cfg,t.category)||cleanVehicleCategory(t.category)||'',problemNote:t.problemNote||'',completedRecordId:t.completedRecordId||null
+      }));
+      return json(res,200,{records:compact,recordTotal:recs.length,seasonRecords:buildSeasonRecordEvidence(recs),attentionIssues:issues.slice(0,100),attentionIssueCount:issues.length,pneuTasks,recordUsers:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
+    }
+    if(body.action==='taskData'){
+      const rows=await getTireTasks(),caps=tireTaskCapabilities(currentUser);
+      return json(res,200,{tireTasks:publicTireTasks(cfg,rows),tireTaskCapabilities:caps,tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
+    }
+    if(body.action==='notificationData'){
+      return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
+    }
+    if(body.action==='historyPage'){
+      if(!hasPermission(currentUser,'historyView'))return json(res,403,{error:'PERMISSION'});
+      const rows=enrichRecords(cfg,await getRecords());
+      const season=String(body.season||''),userId=String(body.userId||''),from=body.from?Date.parse(String(body.from)+'T00:00:00'):NaN,to=body.to?Date.parse(String(body.to)+'T23:59:59.999'):NaN;
+      const filtered=rows.filter((r)=>(!season||r.season===season)&&(!userId||r.userId===userId)&&(!Number.isFinite(from)||r.ts>=from)&&(!Number.isFinite(to)||r.ts<=to));
+      const limit=Math.min(200,Math.max(25,Number(body.limit)||100)),offset=Math.max(0,Number(body.offset)||0),focusId=String(body.focusRecordId||'');
+      let page=filtered.slice(offset,offset+limit);
+      if(focusId){const focus=filtered.find((r)=>r.id===focusId);if(focus&&!page.some((r)=>r.id===focus.id))page=[focus,...page.slice(0,Math.max(0,limit-1))]}
+      return json(res,200,{records:page,total:filtered.length,nextOffset:offset+limit<filtered.length?offset+limit:null,users:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
+    }
+    if(body.action==='historyExportData'){
+      if(!hasPermission(currentUser,'historyExport'))return json(res,403,{error:'PERMISSION'});
+      const rows=enrichRecords(cfg,await getRecords());
+      const season=String(body.season||''),userId=String(body.userId||''),from=body.from?Date.parse(String(body.from)+'T00:00:00'):NaN,to=body.to?Date.parse(String(body.to)+'T23:59:59.999'):NaN;
+      const filtered=rows.filter((r)=>(!season||r.season===season)&&(!userId||r.userId===userId)&&(!Number.isFinite(from)||r.ts>=from)&&(!Number.isFinite(to)||r.ts<=to)).slice(0,10000);
+      return json(res,200,{records:filtered,total:filtered.length});
+    }
+    if(body.action==='globalSearch'){
+      const q=cleanText(body.q,80).toLocaleUpperCase('cs-CZ');
+      if(q.length<2)return json(res,200,{vehicles:[],tasks:[],records:[],notifications:[]});
+      const hay=(vals)=>vals.map((v)=>String(v||'')).join(' ').toLocaleUpperCase('cs-CZ');
+      const canVehicle=userCanAccessModule(cfg,'vehicleOverview',currentUser)||userCanAccessModule(cfg,'pneu',currentUser);
+      const canTasks=userCanAccessModule(cfg,'tiretask',currentUser);
+      const canRecords=userCanAccessModule(cfg,'pneu',currentUser)&&['dotView','dotCreate','fleetView','historyView','attentionView'].some((k)=>hasPermission(currentUser,k));
+      const canNotifications=userCanAccessModule(cfg,'notifications',currentUser)&&hasPermission(currentUser,'notificationsReceive');
+      const [taskRows,recordRows,notifications]=await Promise.all([canTasks?getTireTasks():Promise.resolve([]),canRecords?getRecords():Promise.resolve([]),canNotifications?getNotificationLog():Promise.resolve([])]);
+      const vehicles=canVehicle?cfg.cars.filter((c)=>c.active!==false&&hay([c.plate,c.name,c.vin,c.category]).includes(q)).slice(0,8).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||''})):[];
+      const tasks=canTasks?publicTireTasks(cfg,taskRows).filter((t)=>hay([t.carPlate,t.carName,t.category,t.instructions,t.problemNote,t.date,t.targetSeason]).includes(q)).slice(0,8).map((t)=>({id:t.id,carPlate:t.carPlate,carName:t.carName,date:t.date,status:t.status})):[];
+      const records=canRecords?enrichRecords(cfg,recordRows).filter((r)=>hay([r.plate,r.vehicle,r.dot,r.dotFront,r.dotRear,r.mileage,r.userName]).includes(q)).slice(0,8).map((r)=>({id:r.id,plate:r.plate,season:r.season,dot:r.dot,dotFront:r.dotFront,dotRear:r.dotRear,splitDot:r.splitDot,mileage:r.mileage})):[];
+      const noticeData=canNotifications?buildNotificationData(cfg,currentUser,notifications,true):{notificationInbox:[]};
+      const noticeRows=(noticeData.notificationInbox||[]).filter((n)=>hay([n.title,n.body,n.byUserName,n.carPlate]).includes(q)).slice(0,6).map((n)=>({id:n.id,title:n.title,byUserName:n.byUserName,carPlate:n.carPlate}));
+      return json(res,200,{vehicles,tasks,records,notifications:noticeRows});
     }
 
     if (body.action === 'heartbeat') {
