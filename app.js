@@ -263,13 +263,19 @@ async function loadMyPushDevices(force=false){
 
 // Notifications
 function notificationUiMeta(n){
-  const channel=n?.channel||'automatic',severity=n?.severity||'info';
-  if(channel==='admin'&&severity==='critical')return {icon:'🚨',label:'KRITICKÉ SYSTÉMOVÉ',cls:'critical'};
-  if(channel==='admin'&&severity==='important')return {icon:'⚠️',label:'DŮLEŽITÉ · ADMIN',cls:'important'};
-  if(channel==='admin')return {icon:'🛡️',label:'ADMIN',cls:'admin-info'};
-  if(channel==='operational'&&severity==='important')return {icon:'⚠️',label:'DŮLEŽITÉ · PROVOZNÍ',cls:'important'};
-  if(channel==='operational')return {icon:'🔔',label:'PROVOZNÍ',cls:'operational'};
-  return {icon:'ℹ️',label:'AUTOMATICKÉ',cls:'automatic'};
+  const channel=n?.channel||'automatic',severity=n?.severity||'info',role=n?.byUserRole||'';
+  if(channel==='admin'){
+    const priority=severity==='critical'?'KRITICKÉ':severity==='important'?'DŮLEŽITÉ':'';
+    return {icon:'🚨',label:'ADMIN',priority,cls:'source-admin severity-'+severity};
+  }
+  if(channel==='operational'){
+    const roleLabel=role==='dispatch'?'DISPATCH':role==='technician'?'TECHNIK':role==='driver'?'DRIVER':role==='test'?'TEST':'PROVOZNÍ';
+    return {icon:'🔵',label:roleLabel,priority:severity==='important'?'DŮLEŽITÉ':'',cls:'source-operational severity-'+severity};
+  }
+  return {icon:'ℹ️',label:'AUTOMATICKÉ',priority:severity==='important'?'DŮLEŽITÉ':'',cls:'source-automatic severity-'+severity};
+}
+function notificationKindHtml(m){
+  return '<span class="notification-source">'+m.icon+' '+e(m.label)+'</span>'+(m.priority?'<span class="notification-priority">'+e(m.priority)+'</span>':'');
 }
 function notificationRecipientOptions(selected=''){
   return '<option value="all">Všichni aktivní uživatelé</option>'+(D.notificationRecipients||[]).map(u=>'<option value="'+e(u.id)+'" '+(selected===u.id?'selected':'')+'>'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
@@ -300,7 +306,7 @@ function renderNotifications(){
   $('notificationList').innerHTML=rows.map(n=>{
     const m=notificationUiMeta(n),pending=n.requiresAck&&!n.acknowledgedAt&&!n.expired;
     return '<div class="notification-card '+m.cls+' '+(!n.read?'unread':'')+'">'+
-      '<div class="notification-head"><div><span class="notification-kind">'+m.icon+' '+m.label+'</span><h3>'+e(n.title||'Oznámení')+'</h3></div>'+(!n.read&&!n.expired?'<span class="notification-unread-dot"></span>':'')+'</div>'+
+      '<div class="notification-head"><div><div class="notification-kind">'+notificationKindHtml(m)+'</div><h3>'+e(n.title||'Oznámení')+'</h3></div>'+(!n.read&&!n.expired?'<span class="notification-unread-dot"></span>':'')+'</div>'+
       '<div class="notification-body">'+e(n.body||'')+'</div>'+
       '<div class="notification-meta">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+(n.expired?' · UKONČENO':'')+'</div>'+
       (pending?'<div class="toolbar" style="margin-top:10px"><button class="notification-ack primary" data-id="'+e(n.id)+'">✅ Rozumím</button>'+(n.carId?'<button class="notification-vehicle secondary" data-id="'+e(n.id)+'">🚗 Vozidlo</button>':'')+'</div>':n.acknowledgedAt?'<div class="notification-confirmed">✓ Potvrzeno '+dt(n.acknowledgedAt)+'</div>':'')+
@@ -316,7 +322,7 @@ function renderNotificationToast(){
   if(toastNotificationId===n.id)return;
   toastNotificationId=n.id;const m=notificationUiMeta(n);
   box.className='notification-toast '+m.cls;
-  box.innerHTML='<button id="notificationToastClose" class="notification-toast-close" aria-label="Zavřít">×</button><div class="notification-kind">'+m.icon+' '+m.label+'</div><b>'+e(n.title||'Oznámení')+'</b><div>'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+'</div>';
+  box.innerHTML='<button id="notificationToastClose" class="notification-toast-close" aria-label="Zavřít">×</button><div class="notification-kind">'+notificationKindHtml(m)+'</div><b>'+e(n.title||'Oznámení')+'</b><div>'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+'</div>';
   box.hidden=false;
   api('notificationSeen',{notificationId:n.id}).catch(()=>{});
   const close=()=>{if(toastTimer)clearTimeout(toastTimer);toastTimer=null;box.hidden=true;toastNotificationId=null;refresh()};
@@ -361,7 +367,7 @@ function renderNoticeOverlay(){
   if(!n){ov.hidden=true;box.className='modal-card';box.innerHTML='';return}
   ov.hidden=false;const m=notificationUiMeta(n);
   box.className='modal-card notification-modal '+m.cls;
-  box.innerHTML='<div class="notification-kind">'+m.icon+' '+m.label+'</div><h2>'+e(n.title)+'</h2><div class="sub">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+'</div>'+
+  box.innerHTML='<div class="notification-kind">'+notificationKindHtml(m)+'</div><h2>'+e(n.title)+'</h2><div class="sub">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+'</div>'+
     '<div class="notice">'+e(n.body)+'</div>'+
     '<div class="small" style="margin-top:8px"><b>Vyžaduje potvrzení.</b> Oznámení zůstane otevřené, dokud nepotvrdíš jednu z možností.</div>'+
     '<div class="notice-actions"><button id="noticeOk" class="primary">✅ Rozumím</button>'+
@@ -1224,7 +1230,7 @@ function renderNotificationAdmin(){
   $('notificationLog').innerHTML=(D.notificationLog||[]).slice(0,80).map(n=>{
     const m=notificationUiMeta(n),acks=(n.acks||[]).map(a=>'<div class="ack">✓ '+e(a.userName||a.userId)+' · '+(a.response==='view_vehicle'?'Zobrazil vozidlo':'Rozumím')+' · '+dt(a.at)+'</div>').join('');
     const recipients=(n.recipientUserIds||[]).length,pending=n.requiresAck?Math.max(0,recipients-(n.acks||[]).length):0;
-    return '<div class="item"><b>'+m.icon+' '+e(n.title||n.type)+'</b> <span class="badge">'+e(m.label)+'</span>'+(n.carPlate?' <span class="badge">'+e(n.carPlate)+'</span>':'')+'<div class="small">'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+' · push '+(n.sent??0)+'/'+(n.devices??0)+(n.requiresAck&&recipients?' · potvrzeno '+(n.acks||[]).length+'/'+recipients+' · čeká '+pending:' · bez povinného potvrzení')+'</div>'+acks+'</div>';
+    return '<div class="item"><b>'+m.icon+' '+e(n.title||n.type)+'</b> <span class="badge">'+e(m.label)+(m.priority?' · '+e(m.priority):'')+'</span>'+(n.carPlate?' <span class="badge">'+e(n.carPlate)+'</span>':'')+'<div class="small">'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+' · push '+(n.sent??0)+'/'+(n.devices??0)+(n.requiresAck&&recipients?' · potvrzeno '+(n.acks||[]).length+'/'+recipients+' · čeká '+pending:' · bez povinného potvrzení')+'</div>'+acks+'</div>';
   }).join('')||'<div class="small">Zatím žádná oznámení.</div>';
 }
 $('saveNotificationSettings').onclick=async()=>{const settings={incompleteEnabled:$('autoIncomplete').checked,incompleteRepeatDays:+$('autoIncompleteDays').value,incompleteRecipients:$('autoIncompleteRecipients').value,incompleteMissingSummer:$('autoSummer').checked,incompleteMissingWinter:$('autoWinter').checked,adminAnomalyEnabled:$('autoAnomaly').checked,adminAnomalyRepeatDays:+$('autoAdminDays').value,staleEnabled:$('autoStale').checked,staleDays:+$('autoStaleDays').value};try{await api('adminSaveNotificationSettings',{settings});alert('Pravidla oznámení jsou uložená.');await refresh()}catch(x){alert(errorText(x))}};
