@@ -27,6 +27,10 @@ function normalizeUserNotificationPrefs(raw) {
   const input=raw&&typeof raw==='object'?raw:{};
   return { operational: input.operational !== false, adminInfo: input.adminInfo !== false };
 }
+function normalizeTaskNotifications(raw,role='driver'){
+  const input=raw&&typeof raw==='object'?raw:{};
+  return { accepted: typeof input.accepted==='boolean'?input.accepted:(role==='admin'||role==='dispatch') };
+}
 const SYSTEM_MODES = ['normal', 'read_only', 'maintenance'];
 const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', updatedAt: null, updatedBy: null };
 function systemState(cfg) {
@@ -87,7 +91,7 @@ function publicModules(cfg,currentUser){
 }
 function actionModule(action){
   if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
+  if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskAccept','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['notificationData','sendOperationalNotification'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
@@ -224,7 +228,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 20;
+  cfg.version = 21;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -242,6 +246,7 @@ function normalizeConfig(cfg) {
     if (!u.lastLoginAt) u.lastLoginAt = null;
     if(previousVersion<15)u.pinHash=migrateLegacyTwoDigitPinHash(u.pinHash);
     u.role = normalizeRole(u.role);
+    u.taskNotifications = normalizeTaskNotifications(u.taskNotifications,u.role);
     delete u.transportPrefs;
     u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
     u.pinChangeRequired = normalizePinChangeRequired(u.pinChangeRequired);
@@ -462,7 +467,7 @@ function publicTireTasks(cfg,rows,recs=[]) {
 }
 async function completeMatchingTireTask(cfg, record, user, preferredTaskId = null) {
   const rows=await getTireTasks();
-  const open=(t)=>t.carId===record.carId&&t.targetSeason===record.season&&['planned','in_progress','problem'].includes(t.status);
+  const open=(t)=>t.carId===record.carId&&t.targetSeason===record.season&&['planned','in_progress','problem'].includes(t.status)&&(!t.assignedToUserId||(t.acceptedAt&&t.acceptedById===t.assignedToUserId));
   let t=preferredTaskId ? rows.find((x)=>x.id===String(preferredTaskId)&&open(x)) : null;
   if(!t){
     const day=pragueDate(record.ts);
@@ -631,7 +636,7 @@ function userStats(cfg, recs, pushes, presence) {
       failedPinAttempts: Number(u.failedPinAttempts) || 0, lastFailedPinAt: u.lastFailedPinAt || null, loginLockedAt: u.loginLockedAt || null,
       recordCount: own.length, lastRecordAt: own[0]?.createdAt || null,
       pushDevices: pushes.filter((x) => x.userId === u.id).length,
-      permissions: effectivePermissions(u),
+      permissions: effectivePermissions(u), taskNotifications:normalizeTaskNotifications(u.taskNotifications,u.role),
       presenceStatus: p.status, lastOnlineAt: p.lastOnlineAt, lastActivityAt: p.lastActivityAt,
     };
   });
@@ -673,7 +678,7 @@ async function publicState(cfg,recs,currentUser){
   const publicTasks=publicTireTasks(cfg,tireTaskRows,recs);
   const myActiveTasks=publicTasks.filter((t)=>t.assignedToUserId===currentUser.id&&t.status!=='closed');
   const myTaskSummary=myActiveTasks.slice(0,8).map((t)=>({
-    id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carPlate:t.carPlate||'',carName:t.carName||'',category:t.category||'',problemNote:t.problemNote||''
+    id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carPlate:t.carPlate||'',carName:t.carName||'',category:t.category||'',problemNote:t.problemNote||'',acceptedAt:t.acceptedAt||null,acceptedBy:t.acceptedBy||'',acceptedById:t.acceptedById||null
   }));
   const issues=perms.attentionView?computeIssues(cfg,recs):[];
   return {
@@ -763,7 +768,7 @@ async function sendPushToUsers(cfg, userIds, payload) {
 }
 
 async function notifyTaskAssigned(cfg,tasks,assignee,actor){
-  if(!assignee||!tasks?.length||assignee.id===actor?.id)return {sent:0,failed:0,devices:0};
+  if(!assignee||!tasks?.length)return {sent:0,failed:0,devices:0};
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c])),first=tasks[0],multi=tasks.length>1;
   const plates=tasks.map((t)=>carById[t.carId]?.plate||'vozidlo').slice(0,4);
   const title=multi?'Nový plán TASK · '+tasks.length+' vozidel':'Nový TASK – '+(carById[first.carId]?.plate||'vozidlo');
@@ -777,6 +782,17 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
     byUserId:actor?.id||'system',byUserName:actor?.name||'TASK',byUserRole:actor?.role||''
   });
   const result=await sendPushToUsers(cfg,[assignee.id],{title:'📋 '+title,body,tag:'task-assignment-'+(first.batchId||first.id),url:'/?module=tiretask&task='+encodeURIComponent(first.id)});
+  await patchNotification(n.id,result);
+  return result;
+}
+async function notifyTaskAccepted(cfg,task,actor){
+  const car=cfg.cars.find((c)=>c.id===task.carId);
+  const recipients=cfg.users.filter((u)=>u.active!==false&&u.id!==actor?.id&&normalizeTaskNotifications(u.taskNotifications,u.role).accepted);
+  if(!recipients.length)return {sent:0,failed:0,devices:0};
+  const title='TASK přijat – '+(car?.plate||'vozidlo');
+  const body=(actor?.name||'Uživatel')+' přijal TASK · '+(task.date||'')+' · '+(task.time||'celý den')+' · '+(task.targetSeason==='winter'?'zimní':'letní')+' pneu';
+  const n=await createNotification({type:'task_accepted',channel:'automatic',severity:'important',requiresAck:false,title,body,recipient:'users',recipientUserIds:recipients.map((u)=>u.id),taskId:task.id,carId:task.carId,carPlate:car?.plate||'',byUserId:actor?.id||'system',byUserName:actor?.name||'TASK',byUserRole:actor?.role||''});
+  const result=await sendPushToUsers(cfg,recipients.map((u)=>u.id),{title:'✅ '+title,body,tag:'task-accepted-'+task.id,url:'/?module=tiretask&task='+encodeURIComponent(task.id)});
   await patchNotification(n.id,result);
   return result;
 }
@@ -1094,7 +1110,7 @@ export default async function handler(req, res) {
         updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
         comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:'Položka vytvořena v denním plánu '+(index+1)+'/'+normalized.length}],
         completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
+        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
       }));
       const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
@@ -1127,7 +1143,7 @@ export default async function handler(req, res) {
         updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
         comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:assignee?'Úkol vytvořen a přiřazen: '+assignee.name:'Úkol vytvořen'}],
         completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
+        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
       };
       const rows=await getTireTasks();rows.push(task);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_create',`Vytvořen TASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
@@ -1153,6 +1169,7 @@ export default async function handler(req, res) {
         const assigned=assignedId?cfg.users.find((u)=>u.id===assignedId&&u.active!==false):null;
         if(assignedId&&!assigned)return json(res,404,{error:'USER'});
         task.assignedToUserId=assigned?.id||null;
+        if(before.assignedToUserId!==task.assignedToUserId){task.acceptedAt=null;task.acceptedBy=null;task.acceptedById=null}
       }
       if(body.instructions!==undefined)task.instructions=cleanText(body.instructions,700);
       const now=new Date().toISOString();task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
@@ -1162,6 +1179,20 @@ export default async function handler(req, res) {
         const newlyAssigned=cfg.users.find((u)=>u.id===task.assignedToUserId&&u.active!==false);
         if(newlyAssigned)await notifyTaskAssigned(cfg,[task],newlyAssigned,currentUser).catch((err)=>console.error('task reassignment notify',err?.message));
       }
+      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
+    }
+
+    if (body.action === 'tireTaskAccept') {
+      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
+      if(!task)return json(res,404,{error:'TIRETASK'});
+      if(!task.assignedToUserId||task.assignedToUserId!==currentUser.id)return json(res,403,{error:'TIRETASK_NOT_ASSIGNED',message:'Tento TASK není přiřazený tobě.'});
+      if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
+      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový TASK už nelze přijmout.'});
+      if(task.acceptedAt&&task.acceptedById===currentUser.id)return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0],alreadyAccepted:true});
+      const now=new Date().toISOString();task.acceptedAt=now;task.acceptedBy=currentUser.name;task.acceptedById=currentUser.id;task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
+      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'accepted',at:now,userId:currentUser.id,userName:currentUser.name,text:'TASK přijat uživatelem'});task.activity=task.activity.slice(-200);
+      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_accept','TASK přijat uživatelem '+currentUser.name,{taskId:task.id,acceptedAt:now});
+      await notifyTaskAccepted(cfg,task,currentUser).catch((err)=>console.error('task accepted notify',err?.message));
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1190,6 +1221,7 @@ export default async function handler(req, res) {
       if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'});
       const status=String(body.status||'');
       if(!['planned','in_progress','problem'].includes(status))return json(res,400,{error:'TIRETASK_STATUS'});
+      if(status==='in_progress'&&task.assignedToUserId&&(!task.acceptedAt||task.acceptedById!==task.assignedToUserId))return json(res,409,{error:'TIRETASK_NOT_ACCEPTED',message:'Přiřazený uživatel musí TASK nejdřív přijmout.'});
       const now=new Date().toISOString(),before=task.status;task.status=status;
       task.problemNote=status==='problem'?cleanText(body.problemNote,500):'';
       if(status==='in_progress'&&!task.startedAt)task.startedAt=now;
@@ -1690,7 +1722,7 @@ export default async function handler(req, res) {
       const h = pinHash(pin);
       if (cfg.users.some((u) => u.active && safeEqualHex(u.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
       const role = NON_ADMIN_ROLES.includes(body.role) ? body.role : 'driver';
-      const u = { id: uid('u'), name, role, permissions: {}, pinHash: h, active: true, createdAt: new Date().toISOString(), lastLoginAt: null };
+      const u = { id: uid('u'), name, role, permissions: {}, taskNotifications:normalizeTaskNotifications(null,role), pinHash: h, active: true, createdAt: new Date().toISOString(), lastLoginAt: null };
       cfg.users.push(u); await writeConfig(cfg);
       await appendAudit(currentUser, 'user_add', `Přidán uživatel ${name}`, { userId: u.id });
       return json(res, 200, { ok: true });
@@ -1699,10 +1731,15 @@ export default async function handler(req, res) {
     if (body.action === 'adminUpdateUser') {
       const target = cfg.users.find((x) => x.id === body.userId);
       if (!target) return json(res, 404, { error: 'USER' });
-      const before = { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) };
+      const before = { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target), taskNotifications:normalizeTaskNotifications(target.taskNotifications,target.role) };
       const name = cleanText(body.name, 40);
       if (name) target.name = name;
       if (body.pin !== undefined && body.pin !== '') return json(res,400,{error:'PIN_SELF_SERVICE',message:'PIN uživatele mění pouze uživatel přes výzvu ke změně PINu.'});
+      if(body.taskNotifications&&typeof body.taskNotifications==='object'){
+        const taskNotifications=normalizeTaskNotifications(target.taskNotifications,target.role);
+        if(typeof body.taskNotifications.accepted==='boolean')taskNotifications.accepted=body.taskNotifications.accepted;
+        target.taskNotifications=taskNotifications;
+      }
       if (target.role !== 'admin') {
         if (NON_ADMIN_ROLES.includes(body.role)) target.role = body.role;
         if (body.permissions && typeof body.permissions === 'object') {
@@ -1712,7 +1749,7 @@ export default async function handler(req, res) {
         if (typeof body.active === 'boolean') target.active = body.active;
       }
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) } });
+      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target), taskNotifications:normalizeTaskNotifications(target.taskNotifications,target.role) } });
       return json(res, 200, { ok: true });
     }
 

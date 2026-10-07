@@ -45,7 +45,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',MODULE_OFFLINE:'Modul je dočasně offline.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',MODULE_OFFLINE:'Modul je dočasně offline.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.',TIRETASK_NOT_ACCEPTED:'TASK musí přiřazený uživatel nejdřív přijmout.',TIRETASK_NOT_ASSIGNED:'Tento TASK není přiřazený tobě.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
@@ -704,9 +704,11 @@ function taskDateLabel(t){
   const b=taskBucket(t);if(b==='overdue')return 'Po termínu · '+seasonShortDate(t.date);if(b==='today')return 'Dnes';if(b==='tomorrow')return 'Zítra';return seasonShortDate(t.date);
 }
 function myTaskStatusMeta(t){
+  if(t.assignedToUserId&&!t.acceptedAt&&!['completed','closed'].includes(t.status))return {label:'ČEKÁ NA PŘIJETÍ',icon:'🟡'};
   return t.status==='in_progress'?{label:'PRÁVĚ DĚLÁŠ',icon:'🔵'}:
     t.status==='completed'?{label:'PNEU/DOT HOTOVO',icon:'🟢'}:
-    t.status==='problem'?{label:'PROBLÉM',icon:'🔴'}:{label:'ČEKÁ NA ZPRACOVÁNÍ',icon:'⚪'};
+    t.status==='problem'?{label:'PROBLÉM',icon:'🔴'}:
+    t.acceptedAt?{label:'PŘIJATO',icon:'✅'}:{label:'ČEKÁ NA ZPRACOVÁNÍ',icon:'⚪'};
 }
 function renderHomeAssignedTasks(){
   const card=$('homeMyTasks'),list=$('homeMyTasksList');if(!card||!list)return;
@@ -891,14 +893,15 @@ function renderMyTireTasks(){
   $('tireTaskMineList').innerHTML=['overdue','today','tomorrow','later'].map((key)=>{
     if(!groups[key].length)return '';const gm=taskBucketMeta(key);
     return '<section class="my-task-group '+gm.cls+'"><div class="my-task-group-title">'+gm.label+'</div>'+groups[key].map(({t,index})=>{
-      const sm=myTaskStatusMeta(t),canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id;
+      const sm=myTaskStatusMeta(t),canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id,needsAccept=!!t.assignedToUserId&&!t.acceptedAt;
       const target=t.targetSeason==='winter'?'❄️ Přezout na ZIMNÍ':'☀️ Přezout na LETNÍ';
       let actions='';
-      if(t.status==='planned'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ ZAČÍT PRACOVAT</button>';
-      if(t.status==='in_progress'&&can('dotCreate'))actions+='<button class="tt-dot primary wide" data-id="'+e(t.id)+'">🛞 ZAPSAT PNEU / DOT</button>';
-      if(t.status==='problem'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ POKRAČOVAT V PRÁCI</button>';
-      if(t.status==='problem'&&can('dotCreate'))actions+='<button class="tt-dot secondary" data-id="'+e(t.id)+'">🛞 PNEU / DOT</button>';
-      if(['planned','in_progress'].includes(t.status)&&canProgress)actions+='<button class="tt-problem danger-btn" data-id="'+e(t.id)+'">⚠️ MÁM PROBLÉM</button>';
+      if(needsAccept)actions+='<button class="tt-accept primary wide" data-id="'+e(t.id)+'">✅ PŘIJMOUT TASK</button>';
+      if(!needsAccept&&t.status==='planned'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ ZAČÍT PRACOVAT</button>';
+      if(!needsAccept&&t.status==='in_progress'&&can('dotCreate'))actions+='<button class="tt-dot primary wide" data-id="'+e(t.id)+'">🛞 ZAPSAT PNEU / DOT</button>';
+      if(!needsAccept&&t.status==='problem'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ POKRAČOVAT V PRÁCI</button>';
+      if(!needsAccept&&t.status==='problem'&&can('dotCreate'))actions+='<button class="tt-dot secondary" data-id="'+e(t.id)+'">🛞 PNEU / DOT</button>';
+      if(!needsAccept&&['planned','in_progress'].includes(t.status)&&canProgress)actions+='<button class="tt-problem danger-btn" data-id="'+e(t.id)+'">⚠️ MÁM PROBLÉM</button>';
       if(t.status==='completed'&&canClose)actions+='<button class="tt-close primary wide" data-id="'+e(t.id)+'">✅ DOKONČIT TASK</button>';
       const details='<details class="my-task-details"><summary>Více údajů o vozidle</summary><div class="my-task-detail-grid">'+
         '<div class="my-task-detail"><span>Skupina</span><b>'+e(t.category||t.carCategory||'—')+'</b></div>'+
@@ -910,6 +913,7 @@ function renderMyTireTasks(){
         '<div class="my-task-head"><div><div class="my-task-order">#'+(index+1)+' V PRACOVNÍ FRONTĚ</div><div class="my-task-plate">'+e(t.carPlate||'—')+'</div><div class="my-task-car">'+e(t.carName||'Bez názvu')+(t.category?' · '+e(t.category):'')+'</div></div><span class="tiretask-status '+e(t.status)+'">'+sm.icon+' '+sm.label+'</span></div>'+
         '<div class="my-task-when">'+e(taskDateLabel(t))+' · '+tireTaskTimeLabel(t)+'</div><div class="my-task-action-label">'+target+'</div>'+
         (t.instructions?'<div class="my-task-instructions"><b>📌 Instrukce</b><div style="margin-top:4px">'+e(t.instructions)+'</div></div>':'')+
+        (t.acceptedAt?'<div class="my-task-accepted"><b>✅ TASK přijat</b><div style="margin-top:3px">'+e(t.acceptedBy||'Uživatel')+' · '+dt(t.acceptedAt)+'</div></div>':'')+
         (t.problemNote?'<div class="my-task-problem"><b>⚠️ Nahlášený problém</b><div style="margin-top:4px">'+e(t.problemNote)+'</div></div>':'')+
         (t.completedRecordId?'<div class="my-task-complete"><b>✅ PNEU/DOT zapsáno</b><div style="margin-top:3px">DOT '+e(t.completedDot||'—')+' · '+Number(t.completedMileage??0).toLocaleString('cs-CZ')+' km</div><div class="small">'+dt(t.completedAt)+'</div></div>':'')+
         details+(actions?'<div class="my-task-actions">'+actions+'</div>':'')+
@@ -935,16 +939,17 @@ function renderTireTask(){
     '<div class="tiretask-stat"><b>'+active+'</b><span>Rozpracováno / problém</span></div>'+
     '<div class="tiretask-stat"><b>'+done+'</b><span>Hotovo</span></div>';
   $('tireTaskList').innerHTML=rows.map(t=>{
-    const sm=tireTaskStatusMeta(t.status),seasonLabel=t.targetSeason==='winter'?'❄️ ZIMNÍ':'☀️ LETNÍ',canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id;
+    const sm=tireTaskStatusMeta(t.status),seasonLabel=t.targetSeason==='winter'?'❄️ ZIMNÍ':'☀️ LETNÍ',canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id,needsAccept=!!t.assignedToUserId&&!t.acceptedAt;
     const comments=(t.comments||[]).slice(-5).map(x=>'<div class="tiretask-comment"><b>'+e(x.userName||'—')+'</b> <span class="small">'+dt(x.at)+'</span><div>'+e(x.text)+'</div></div>').join('');
     const activity=(t.activity||[]).slice(-5).reverse().map(x=>'<div>'+dt(x.at)+' · '+e(x.userName||'Systém')+' · '+e(x.text||'')+'</div>').join('');
     let actions='';
     if(t.status!=='closed'){
-      if(canProgress&&t.status!=='completed'){
+      if(needsAccept&&t.assignedToUserId===me?.id)actions+='<button class="tt-accept primary" data-id="'+e(t.id)+'">✅ Přijmout TASK</button>';
+      if(!needsAccept&&canProgress&&t.status!=='completed'){
         if(t.status!=='in_progress')actions+='<button class="tt-start secondary" data-id="'+e(t.id)+'">▶ Rozpracovat</button>';
         actions+='<button class="tt-problem danger-btn" data-id="'+e(t.id)+'">⚠ Problém</button>';
       }
-      if(can('dotCreate')&&t.status!=='completed')actions+='<button class="tt-dot primary" data-id="'+e(t.id)+'">🛞 Zapsat PNEU/DOT</button>';
+      if(!needsAccept&&can('dotCreate')&&t.status!=='completed')actions+='<button class="tt-dot primary" data-id="'+e(t.id)+'">🛞 Zapsat PNEU/DOT</button>';
       if(caps.edit&&t.status!=='completed')actions+='<button class="tt-edit secondary" data-id="'+e(t.id)+'">Upravit plán</button>';
       if(canClose&&t.status==='completed')actions+='<button class="tt-close primary" data-id="'+e(t.id)+'">✅ Uložit / ukončit</button>';
     }
@@ -956,6 +961,8 @@ function renderTireTask(){
       '<div class="tiretask-badges"><span class="tiretask-badge">'+e(tireTaskCategoryLabel(t.category))+'</span><span class="tiretask-badge '+e(t.targetSeason)+'">'+seasonLabel+'</span></div>'+
       (caps.edit?'<div><div class="filter-label">Přiřazeno</div><select class="tt-assignee-select" data-id="'+e(t.id)+'">'+tireTaskAssignableOptions(t.assignedToUserId||'')+'</select></div>':(t.assignedToName?'<div class="tiretask-assigned">👤 Přiřazeno: '+e(t.assignedToName)+'</div>':'<div class="small" style="margin:7px 0">👥 Společný úkol · nepřiřazeno</div>'))+
       (t.instructions?'<div class="tiretask-instructions"><b>Instrukce Dispatch</b><div style="margin-top:4px">'+e(t.instructions)+'</div></div>':'')+
+      (t.assignedToUserId&&!t.acceptedAt?'<div class="tiretask-instructions"><b>🟡 Čeká na přijetí TASKu</b><div class="small">Přiřazený uživatel musí TASK přijmout před zahájením práce.</div></div>':'')+
+      (t.acceptedAt?'<div class="tiretask-complete"><b>✅ TASK přijat</b><div>'+e(t.acceptedBy||'Uživatel')+' · '+dt(t.acceptedAt)+'</div></div>':'')+
       (t.problemNote?'<div class="tiretask-problem"><b>⚠ Problém</b><div>'+e(t.problemNote)+'</div></div>':'')+
       (t.completedRecordId?'<div class="tiretask-complete"><b>✅ PNEU/DOT zapsáno</b><div>DOT '+e(t.completedDot||'—')+' · '+Number(t.completedMileage??0).toLocaleString('cs-CZ')+' km</div><div class="small">'+e(t.completedBy||'—')+' · '+dt(t.completedAt)+'</div></div>':'')+
       (actions?'<div class="toolbar">'+actions+'</div>':'')+
@@ -964,6 +971,7 @@ function renderTireTask(){
       '</div>';
   }).join('')||'<div class="card"><div class="small">Nejsou žádné aktivní TASKy.</div></div>';
 
+  document.querySelectorAll('.tt-accept').forEach(b=>b.onclick=()=>acceptTireTask(b.dataset.id));
   document.querySelectorAll('.tt-start').forEach(b=>b.onclick=()=>setTireTaskStatus(b.dataset.id,'in_progress'));
   document.querySelectorAll('.tt-problem').forEach(b=>b.onclick=()=>openTaskProblem(b.dataset.id));
   document.querySelectorAll('.tt-dot').forEach(b=>b.onclick=()=>openPneuFromTireTask(b.dataset.id));
@@ -983,6 +991,9 @@ function closeTaskProblem(){taskProblemTaskId=null;if($('taskProblemOverlay'))$(
 async function submitTaskProblem(){
   const text=$('taskProblemText')?.value.trim();if(!taskProblemTaskId||!text)return note($('taskProblemMsg'),'Popiš prosím problém.','msg err');
   const ok=await setTireTaskStatus(taskProblemTaskId,'problem',text);if(ok)closeTaskProblem();
+}
+async function acceptTireTask(id){
+  try{await api('tireTaskAccept',{taskId:id});await refresh();return true}catch(x){alert(errorText(x));return false}
 }
 async function setTireTaskStatus(id,status,problemNote=''){
   try{await api('tireTaskSetStatus',{taskId:id,status,problemNote});await refresh();return true}catch(x){alert(errorText(x));return false}
@@ -1293,15 +1304,17 @@ function renderAdminUsers(){
     const role=admin?'<span class="badge">Admin</span>':'<select class="ur" data-id="'+e(u.id)+'" style="max-width:160px"><option value="driver" '+(u.role==='driver'?'selected':'')+'>Driver</option><option value="dispatch" '+(u.role==='dispatch'?'selected':'')+'>Dispatch</option><option value="technician" '+(u.role==='technician'?'selected':'')+'>Technician</option><option value="test" '+(u.role==='test'?'selected':'')+'>TEST</option></select>';
     const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Práva nastav níže a přístup k jednotlivým modulům v Admin → Moduly.</div></div>':'';
     const perms=admin?'<div class="small" style="margin:9px 0"><b>Plný systémový přístup.</b> Tato práva nelze vypnout.</div>':'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
+    const taskNotices='<div class="module-note" style="margin-top:9px"><b>🔔 TASK oznámení</b><label class="switchline"><input class="utaskaccepted" data-id="'+e(u.id)+'" type="checkbox" '+(u.taskNotifications?.accepted?'checked':'')+'><span><b>Přijetí TASKu</b><span class="small" style="display:block">Dostane oznámení, když přiřazený uživatel TASK přijme.</span></span></label></div>';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
     const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+taskNotices+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
     const role=u?.role==='admin'?'admin':document.querySelector('.ur[data-id="'+id+'"]').value;
     const permissions={};if(role!=='admin')document.querySelectorAll('.uperm[data-id="'+id+'"]').forEach(x=>permissions[x.dataset.k]=x.checked);
-    try{await api('adminUpdateUser',{userId:id,name:n,role,permissions});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
+    const taskNotifications={accepted:!!document.querySelector('.utaskaccepted[data-id="'+id+'"]')?.checked};
+    try{await api('adminUpdateUser',{userId:id,name:n,role,permissions,taskNotifications});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
   });
   document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
