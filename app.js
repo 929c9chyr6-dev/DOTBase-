@@ -747,7 +747,6 @@ function renderVehicleCategories(){
   const sel=$('newVehicleCategory');if(sel){const cur=sel.value;sel.innerHTML=vehicleCategoryOptions(cur,false);if(cur&&(D.vehicleCategories||[]).includes(cur))sel.value=cur}
   if($('vehicleCategoryList'))$('vehicleCategoryList').innerHTML=(D.vehicleCategories||[]).map(x=>'<span class="vehicle-category-badge">'+e(x)+'</span>').join(' ')||'<span class="small">Žádné kategorie.</span>';
 }
-$('addCar').onclick=async()=>{const plate=$('newPlate').value.trim(),name=$('newName').value.trim(),vin=$('newVin').value.trim(),category=$('newVehicleCategory').value;if(!plate||!category)return alert('Doplň SPZ a vyber kategorii vozidla.');try{await api('adminAddCar',{plate,name,vin,category});$('newPlate').value=$('newName').value=$('newVin').value='';$('newVehicleCategory').value='';await refresh()}catch(x){alert(errorText(x))}};
 function editCar(id){editingCarId=id;renderAdminCars()}
 function cancelCarEdit(){editingCarId=null;renderAdminCars()}
 async function saveCarEdit(id){
