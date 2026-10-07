@@ -98,7 +98,7 @@ function actionModule(action){
   return null;
 }
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician', 'test'];
-const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','tireTaskCompletedView','notificationsReceive','notificationsSendOperational'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','tireTaskDelete','tireTaskCompletedView','notificationsReceive','notificationsSendOperational'];
 const BASE_PERMISSIONS = {
   dotView: true,
   dotCreate: true,
@@ -115,6 +115,7 @@ const BASE_PERMISSIONS = {
   attentionEdit: false,
   tireTaskCreate: false,
   tireTaskEdit: false,
+  tireTaskDelete: false,
   tireTaskCompletedView: false,
   notificationsReceive: true,
   notificationsSendOperational: false,
@@ -129,7 +130,7 @@ function effectivePermissions(user) {
   const out = user?.role === 'test'
     ? Object.fromEntries(PERMISSION_KEYS.map((k)=>[k,false]))
     : { ...BASE_PERMISSIONS };
-  if(user?.role==='dispatch')out.tireTaskCompletedView=true;
+  if(user?.role==='dispatch'){out.tireTaskCompletedView=true;out.tireTaskDelete=true}
   for (const k of PERMISSION_KEYS) if (typeof user?.permissions?.[k] === 'boolean') out[k] = user.permissions[k];
   return out;
 }
@@ -230,7 +231,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 23;
+  cfg.version = 24;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -429,7 +430,7 @@ function tireTaskCapabilities(user) {
     progress:admin||dispatch||technician,
     comment:true,
     close:admin||dispatch||technician,
-    delete:admin||dispatch||edit,
+    delete:admin||hasPermission(user,'tireTaskDelete'),
   };
 }
 async function getTireTasks() {
