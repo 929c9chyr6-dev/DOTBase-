@@ -45,7 +45,7 @@ function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICAT
 function lockApp(message='',cls='msg'){
   tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
-  if(message)note($('loginMsg'),message,cls);$('pin').focus();
+  if(message)note($('loginMsg'),message,cls);loadLoginUsers().finally(()=>$('pin').focus());
 }
 async function loadLoginUsers(){
   if(!$('loginUser'))return;
