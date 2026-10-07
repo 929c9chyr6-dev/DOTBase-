@@ -699,7 +699,7 @@ function taskBucket(t){
 }
 function taskBucketMeta(key){return key==='overdue'?{label:'🔴 PO TERMÍNU',cls:'overdue'}:key==='today'?{label:'🟠 DNES',cls:'today'}:key==='tomorrow'?{label:'🔵 ZÍTRA',cls:'tomorrow'}:{label:'⚪ POZDĚJI',cls:'later'}}
 function taskDateLabel(t){
-  const b=taskBucket(t);if(b==='overdue')return 'Po termínu · '+formatTaskCampaignLabel(t.date);if(b==='today')return 'Dnes';if(b==='tomorrow')return 'Zítra';return formatTaskCampaignLabel(t.date);
+  const b=taskBucket(t);if(b==='overdue')return 'Po termínu · '+seasonShortDate(t.date);if(b==='today')return 'Dnes';if(b==='tomorrow')return 'Zítra';return seasonShortDate(t.date);
 }
 function myTaskStatusMeta(t){
   return t.status==='in_progress'?{label:'PRÁVĚ DĚLÁŠ',icon:'🔵'}:
@@ -980,10 +980,10 @@ function openTaskProblem(id){
 function closeTaskProblem(){taskProblemTaskId=null;if($('taskProblemOverlay'))$('taskProblemOverlay').hidden=true}
 async function submitTaskProblem(){
   const text=$('taskProblemText')?.value.trim();if(!taskProblemTaskId||!text)return note($('taskProblemMsg'),'Popiš prosím problém.','msg err');
-  try{await setTireTaskStatus(taskProblemTaskId,'problem',text);closeTaskProblem()}catch{}
+  const ok=await setTireTaskStatus(taskProblemTaskId,'problem',text);if(ok)closeTaskProblem();
 }
 async function setTireTaskStatus(id,status,problemNote=''){
-  try{await api('tireTaskSetStatus',{taskId:id,status,problemNote});await refresh()}catch(x){alert(errorText(x))}
+  try{await api('tireTaskSetStatus',{taskId:id,status,problemNote});await refresh();return true}catch(x){alert(errorText(x));return false}
 }
 async function addTireTaskComment(id){
   const input=document.querySelector('.tt-comment-input[data-id="'+id+'"]'),text=input?.value.trim();
