@@ -40,16 +40,14 @@ function defaultSystemMessage(mode) {
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
-const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','maintenance','notifications','settings'];
+const MODULE_KEYS = ['vehicleOverview','pneu','tiretask','notifications','settings'];
 const MODULE_LABELS = {
-  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TASK', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
+  vehicleOverview:'PŘEHLED VOZIDEL', pneu:'PNEU / DOT', tiretask:'TASK', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
 };
 const DEFAULT_MODULES = {
   vehicleOverview:{ visible:true, online:true, offlineMessage:'Přehled vozidel je dočasně mimo provoz.' },
-  service:{ visible:true, online:true, offlineMessage:'Modul SERVIS je dočasně mimo provoz.' },
   pneu:{ visible:true, online:true, offlineMessage:'Modul PNEU / DOT je dočasně mimo provoz.' },
   tiretask:{ visible:true, online:true, offlineMessage:'Modul TASK je dočasně mimo provoz.' },
-  maintenance:{ visible:true, online:true, offlineMessage:'Modul ÚDRŽBA je dočasně mimo provoz.' },
   notifications:{ visible:true, online:true, offlineMessage:'Modul OZNÁMENÍ je dočasně mimo provoz.' },
   settings:{ visible:true, online:true, offlineMessage:'Nastavení aplikace je dočasně mimo provoz.' },
 };
@@ -226,7 +224,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 18;
+  cfg.version = 19;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
