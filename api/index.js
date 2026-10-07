@@ -377,6 +377,7 @@ function normalizeNotificationExpiry(v){
 function userAllowsNotification(user,channel,severity){
   const prefs=normalizeUserNotificationPrefs(user?.notificationPrefs);
   if(channel==='admin'&&(severity==='important'||severity==='critical'))return true;
+  if(channel==='operational'&&severity==='important')return true;
   if(channel==='operational')return prefs.operational;
   if(channel==='admin')return prefs.adminInfo;
   return true;
@@ -787,7 +788,7 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
     carId:multi?null:first.carId,carPlate:multi?'':(carById[first.carId]?.plate||''),
     byUserId:actor?.id||'system',byUserName:actor?.name||'TASK',byUserRole:actor?.role||''
   });
-  const result=await sendPushToUsers(cfg,[assignee.id],{title:'📋 '+title,body,tag:'task-assignment-'+(first.batchId||first.id),url:'/?module=tiretask&task='+encodeURIComponent(first.id)});
+  const result=await sendPushToUsers(cfg,[assignee.id],{title:'📋 DŮLEŽITÉ · '+title,body,tag:'task-assignment-'+(first.batchId||first.id),url:'/?module=tiretask&task='+encodeURIComponent(first.id)});
   await patchNotification(n.id,result);
   return result;
 }
