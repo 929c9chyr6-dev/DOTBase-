@@ -38,7 +38,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;
@@ -368,7 +368,9 @@ function updateTrafficRepeatVisibility(){
 function renderTrafficPrefs(force=false){
   if(!$('trafficPrefsCard'))return;
   const t=D.transport||{},p=t.prefs||{};
-  $('trafficPrefsCard').hidden=t.enabled===false;
+  const transportOffline=me?.role!=='admin'&&moduleCfg('transport').online===false;
+  const hiddenByAdmin=me?.role!=='admin'&&t.userSettingsVisible===false;
+  $('trafficPrefsCard').hidden=t.enabled===false||transportOffline||hiddenByAdmin;
   if(trafficPrefsDirty&&!force)return;
   $('trafficNotifyEnabled').checked=!!p.notificationsEnabled;
   $('trafficSeverity').value=p.severity||'significant';
@@ -486,6 +488,7 @@ function renderTransportAdmin(){
   $('trafficAdminSourceText').textContent=t.sourceConfigured?'Golemio API klíč je bezpečně uložený na serveru. Přístup ke konkrétním dopravním zdrojům se ověřuje při načtení reportu.':'Golemio API klíč zatím není v prostředí Vercelu. Modul funguje, ale živá dopravní data se nezačnou načítat, dokud se klíč nepřidá.';
   $('transportEnabled').checked=t.enabled!==false;
   $('transportNotificationsEnabled').checked=t.notificationsEnabled!==false;
+  $('transportUserSettingsVisible').checked=t.userSettingsVisible!==false;
   $('transportCacheMinutes').value=String(t.cacheMinutes||3);
   $('transportPollMinutes').value=String(t.pollMinutes||5);
   $('adminTrafficCorridors').innerHTML=(t.corridors||[]).map(x=>
@@ -687,7 +690,7 @@ if($('saveTrafficPrefs'))$('saveTrafficPrefs').onclick=async()=>{
   catch(x){note($('trafficPrefsMsg'),errorText(x),'msg err')}
 };
 if($('saveTransportSettings'))$('saveTransportSettings').onclick=async()=>{
-  const settings={enabled:$('transportEnabled').checked,notificationsEnabled:$('transportNotificationsEnabled').checked,cacheMinutes:+$('transportCacheMinutes').value,pollMinutes:+$('transportPollMinutes').value};
+  const settings={enabled:$('transportEnabled').checked,notificationsEnabled:$('transportNotificationsEnabled').checked,userSettingsVisible:$('transportUserSettingsVisible').checked,cacheMinutes:+$('transportCacheMinutes').value,pollMinutes:+$('transportPollMinutes').value};
   try{await api('adminSaveTransportSettings',{settings});note($('transportAdminMsg'),'Nastavení Dopravy je uložené.','msg ok');await refresh()}catch(x){note($('transportAdminMsg'),errorText(x),'msg err')}
 };
 if($('addTrafficCorridor'))$('addTrafficCorridor').onclick=async()=>{
