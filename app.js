@@ -268,12 +268,12 @@ function renderNoticeOverlay(){
   const ov=$('noticeOverlay'),box=$('noticeBox');
   if(!me){ov.hidden=true;return}
   if(openVehicleDetail){
-    ov.hidden=false;box.innerHTML=vehicleDetailHtml(openVehicleDetail);
+    ov.hidden=false;box.className='modal-card';box.innerHTML=vehicleDetailHtml(openVehicleDetail);
     $('closeVehicleDetail').onclick=async()=>{openVehicleDetail=null;await refresh()};
     return;
   }
   const n=pendingNotifications()[0];
-  if(!n){ov.hidden=true;box.innerHTML='';return}
+  if(!n){ov.hidden=true;box.className='modal-card';box.innerHTML='';return}
   ov.hidden=false;const m=notificationUiMeta(n);
   box.className='modal-card notification-modal '+m.cls;
   box.innerHTML='<div class="notification-kind">'+m.icon+' '+m.label+'</div><h2>'+e(n.title)+'</h2><div class="sub">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+'</div>'+

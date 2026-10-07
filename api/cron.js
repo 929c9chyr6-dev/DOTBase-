@@ -44,7 +44,7 @@ async function writeNotificationLog(rows) { await writeJson('notifications.json'
 function nid(prefix = 'n') { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
 async function createNotification(row) {
   const rows = await getNotificationLog();
-  const n = { id: nid(), ts: Date.now(), createdAt: new Date().toISOString(), recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))], acks: [], ...row };
+  const n = { id: nid(), ts: Date.now(), createdAt: new Date().toISOString(), channel:'automatic', severity:'info', requiresAck:false, recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))], acks: [], seen: [], ...row };
   rows.unshift(n); await writeNotificationLog(rows); return n;
 }
 async function patchNotification(id, patch) {

@@ -372,11 +372,12 @@ async function getNotificationLog() { return await readJson('notifications.json'
 async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
 function normalizeNotificationRecord(n) {
   const type=String(n?.type||'');
+  const legacyPassive=!n?.channel&&typeof n?.requiresAck!=='boolean'&&type!=='manual';
   const channel=['operational','admin','automatic'].includes(n?.channel)?n.channel:(type==='manual'?'admin':'automatic');
   const severity=['info','important','critical'].includes(n?.severity)?n.severity:(type==='manual'?'important':'info');
   const requiresAck=typeof n?.requiresAck==='boolean'?n.requiresAck:type==='manual';
   const expiresAt=n?.expiresAt&&Number.isFinite(Date.parse(n.expiresAt))?new Date(n.expiresAt).toISOString():null;
-  return {...n,channel,severity,requiresAck,expiresAt,acks:Array.isArray(n?.acks)?n.acks:[],seen:Array.isArray(n?.seen)?n.seen:[]};
+  return {...n,channel,severity,requiresAck,expiresAt,legacyPassive,acks:Array.isArray(n?.acks)?n.acks:[],seen:Array.isArray(n?.seen)?n.seen:[]};
 }
 function notificationExpired(n,now=Date.now()){return !!(n?.expiresAt&&Date.parse(n.expiresAt)<=now)}
 function normalizeNotificationExpiry(v){
@@ -646,7 +647,7 @@ async function publicState(cfg, recs, currentUser) {
     return {
       id:n.id,type:n.type,channel:n.channel,severity:n.severity,requiresAck:!!n.requiresAck,title:n.title,body:n.body,createdAt:n.createdAt,
       expiresAt:n.expiresAt||null,expired:notificationExpired(n),byUserName:n.byUserName||'',carId:n.carId||null,carPlate:n.carId?(carById[n.carId]?.plate||n.carPlate||''):(n.carPlate||''),
-      acknowledgedAt:ack?.at||null,seenAt:seen?.at||ack?.at||null,read:!!(seen||ack),
+      acknowledgedAt:ack?.at||null,seenAt:seen?.at||ack?.at||null,read:!!(seen||ack||n.legacyPassive),
     };
   };
   const severityOrder={critical:3,important:2,info:1};
@@ -655,7 +656,7 @@ async function publicState(cfg, recs, currentUser) {
     .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
     .map(publicNotification);
   const toastNotifications=notificationRows
-    .filter((n)=>!n.requiresAck&&!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id))
+    .filter((n)=>!n.requiresAck&&!n.legacyPassive&&!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id))
     .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
     .map(publicNotification);
   const notificationInbox=notificationRows.slice(0,150).map(publicNotification);
@@ -1218,13 +1219,14 @@ export default async function handler(req, res) {
         await writeNotificationLog(notifications);
         const responseText = response === 'view_vehicle' ? 'zobrazil vozidlo' : 'potvrdil Rozumím';
         await appendAudit(currentUser, 'notification_ack', currentUser.name + ' ' + responseText + ': ' + n.title, { notificationId: n.id, carId: n.carId || null, response });
-        const adminIds = cfg.users.filter((u) => u.active && u.role === 'admin' && u.id !== currentUser.id).map((u) => u.id);
-        if (adminIds.length) {
-          await sendPushToUsers(cfg, adminIds, {
+        const sender=cfg.users.find((u)=>u.active&&u.id===n.byUserId&&u.id!==currentUser.id);
+        const confirmationIds=sender?[sender.id]:cfg.users.filter((u)=>u.active&&u.role==='admin'&&u.id!==currentUser.id).map((u)=>u.id);
+        if (confirmationIds.length) {
+          await sendPushToUsers(cfg, confirmationIds, {
             title: 'Potvrzeno oznámení',
             body: currentUser.name + ': ' + (response === 'view_vehicle' ? 'Zobrazil vozidlo' : 'Rozumím') + ' – ' + n.title,
             tag: 'ack-' + n.id + '-' + currentUser.id,
-            url: '/?tab=admin',
+            url: '/?module=notifications',
           });
         }
       }
