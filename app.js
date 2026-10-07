@@ -543,8 +543,19 @@ function renderVehicleOverview(){
     return String(a.plate||'').localeCompare(String(b.plate||''),'cs');
   });
   const q=String($('vehicleOverviewSearch')?.value||'').trim().toLocaleUpperCase('cs-CZ');
-  const rows=all.filter(v=>!q||[v.name,v.plate,v.vin,v.category,v.lastModifiedBy].join(' ').toLocaleUpperCase('cs-CZ').includes(q));
-  $('vehicleOverviewCount').textContent=rows.length+' z '+all.length+' vozidel';
+  const categorySelect=$('vehicleOverviewCategory'),selectedCategory=String(categorySelect?.value||'');
+  if(categorySelect){
+    const options=['<option value="">Všechny skupiny</option>','<option value="__NONE__">Bez kategorie</option>',...(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'">'+e(x)+'</option>')];
+    categorySelect.innerHTML=options.join('');
+    if(selectedCategory==='__NONE__'||(D.vehicleCategories||[]).includes(selectedCategory))categorySelect.value=selectedCategory;
+  }
+  const category=String(categorySelect?.value||'');
+  const rows=all.filter(v=>{
+    if(category==='__NONE__'&&v.category)return false;
+    if(category&&category!=='__NONE__'&&v.category!==category)return false;
+    return !q||[v.name,v.plate,v.vin,v.category,v.lastModifiedBy].join(' ').toLocaleUpperCase('cs-CZ').includes(q);
+  });
+  $('vehicleOverviewCount').textContent=rows.length+' z '+all.length+' vozidel'+(category?' · skupina: '+(category==='__NONE__'?'Bez kategorie':category):'');
   const season=(label,icon,s)=>'<div class="vehicle-overview-season"><div class="season-title">'+icon+' '+label+'</div>'+
     (s?'<div><b>DOT '+e(s.dot||'—')+'</b></div><div class="small">'+Number(s.mileage??0).toLocaleString('cs-CZ')+' km</div><div class="small">'+e(s.userName||'—')+' · '+dt(s.createdAt)+'</div>':'<div class="small">Bez záznamu</div>')+'</div>';
   $('vehicleOverviewList').innerHTML=rows.map(v=>{
@@ -561,7 +572,7 @@ function renderVehicleOverview(){
       '<div class="vehicle-overview-dot">'+season('Letní','☀️',v.summer)+season('Zimní','❄️',v.winter)+'</div>'+
       '<div class="vehicle-overview-meta"><div><b>Poslední úprava:</b> '+e(v.lastModifiedBy||'—')+'</div><div class="small">'+dt(v.lastModifiedAt)+'</div><div class="small" style="margin-top:5px">Vozidlo založeno: '+dt(v.createdAt)+'</div></div>'+
       '</div>';
-  }).join('')||'<div class="card"><div class="small">'+(q?'Žádné vozidlo neodpovídá hledání.':'V evidenci zatím nejsou žádná vozidla.')+'</div></div>';
+  }).join('')||'<div class="card"><div class="small">'+((q||category)?'Žádné vozidlo neodpovídá zvolenému hledání nebo skupině.':'V evidenci zatím nejsou žádná vozidla.')+'</div></div>';
 }
 
 function renderVehiclePreviews(target,kind){
@@ -869,6 +880,7 @@ if($('createTireTask'))$('createTireTask').onclick=async()=>{
 document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.onclick=()=>{tireTaskView=b.dataset.tiretaskView;renderTireTask()});
 if($('tireTaskCarSearch'))$('tireTaskCarSearch').oninput=()=>{tireTaskCarSearch=$('tireTaskCarSearch').value;fillTireTaskCars()};
 if($('vehicleOverviewSearch'))$('vehicleOverviewSearch').oninput=renderVehicleOverview;
+if($('vehicleOverviewCategory'))$('vehicleOverviewCategory').onchange=renderVehicleOverview;
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
 document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
 document.querySelectorAll('.admin-nav-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.admin-nav-btn').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.admin-pane').forEach(p=>p.classList.toggle('active',p.id==='admin-'+b.dataset.admin))});

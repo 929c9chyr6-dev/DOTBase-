@@ -59,7 +59,10 @@
 <section id="vehicleOverview" class="module-screen">
 <div class="module-head"><div><h2>🚗 PŘEHLED VOZIDEL</h2><div class="small">Souhrnná karta každého vozidla na jednom místě</div></div><button class="back-home">← Domů</button></div>
 <div class="card">
-<div class="search-wrap"><span class="search-icon">🔎</span><input id="vehicleOverviewSearch" type="search" autocomplete="off" placeholder="Hledat vozidlo, SPZ, VIN, kategorii nebo posledního uživatele…"></div>
+<div class="filter-grid">
+<div><div class="filter-label">Hledání</div><div class="search-wrap"><span class="search-icon">🔎</span><input id="vehicleOverviewSearch" type="search" autocomplete="off" placeholder="SPZ, model, VIN…"></div></div>
+<div><div class="filter-label">Skupina vozidel</div><select id="vehicleOverviewCategory"><option value="">Všechny skupiny</option></select></div>
+</div>
 <div id="vehicleOverviewCount" class="small count" style="margin-top:7px"></div>
 </div>
 <div id="vehicleOverviewList" class="vehicle-overview-grid"></div>
