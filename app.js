@@ -727,11 +727,7 @@ function tireTaskStatusMeta(v){
 }
 function tireTaskCaps(){return D.tireTaskCapabilities||{view:true,create:false,edit:false,progress:false,comment:true,close:false,delete:false}}
 function tireTaskRowsForView(){
-  const rows=(D.tireTasks||[]).slice(),today=localDateISO(),tomorrow=addDaysISO(today,1),end=addDaysISO(today,6);
-  if(tireTaskView==='tomorrow')return rows.filter(t=>t.date===tomorrow);
-  if(tireTaskView==='week')return rows.filter(t=>t.date>=today&&t.date<=end);
-  if(tireTaskView==='history')return rows.filter(t=>t.status==='closed'||t.date<today).sort((a,b)=>(String(b.closedAt||b.date)+' '+String(b.time||'')).localeCompare(String(a.closedAt||a.date)+' '+String(a.time||'')));
-  return rows.filter(t=>t.date===today);
+  return (D.tireTasks||[]).filter(t=>t.status!=='closed');
 }
 function newTireTaskDraftRow(seed={}){
   return {key:String(++tireTaskDraftSeq),time:seed.time||'',carId:seed.carId||'',category:seed.category||'',targetSeason:seed.targetSeason||'winter',search:seed.search||''};
@@ -816,7 +812,6 @@ function renderTireTask(){
   fillTireTaskAssignees();
   renderMyTireTasks();
   if($('tireTaskDate')&&!$('tireTaskDate').value)$('tireTaskDate').value=today;
-  document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.classList.toggle('active',b.dataset.tiretaskView===tireTaskView));
   const rows=tireTaskRowsForView();
   const waiting=rows.filter(t=>t.status==='planned').length;
   const active=rows.filter(t=>t.status==='in_progress'||t.status==='problem').length;
@@ -1367,11 +1362,9 @@ if($('createTireTask'))$('createTireTask').onclick=async()=>{
     const result=await api('tireTaskCreateBatch',data);
     tireTaskDraftRows=[newTireTaskDraftRow()];$('tireTaskInstructions').value='';$('tireTaskAssignee').value='';
     note($('tireTaskCreateMsg'),'✅ Denní plán byl vytvořen · '+result.count+' vozidel.','msg ok');
-    tireTaskView=date===localDateISO()?'today':date===addDaysISO(localDateISO(),1)?'tomorrow':'week';
     await refresh();setTimeout(()=>$('tireTaskCreateMsg').innerHTML='',2200)
   }catch(x){note($('tireTaskCreateMsg'),errorText(x),'msg err')}
 };
-document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.onclick=()=>{tireTaskView=b.dataset.tiretaskView;renderTireTask()});
 if($('vehicleOverviewSearch'))$('vehicleOverviewSearch').oninput=renderVehicleOverview;
 if($('vehicleOverviewCategory'))$('vehicleOverviewCategory').onchange=renderVehicleOverview;
 if($('vehicleOverviewAddCar'))$('vehicleOverviewAddCar').onclick=async()=>{
