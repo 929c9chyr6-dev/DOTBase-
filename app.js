@@ -527,11 +527,10 @@ function tireTaskCategoryOptions(selected=''){
   return '<option value="">Vyber skupinu…</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'" '+(x===selected?'selected':'')+'>'+e(x)+'</option>').join('');
 }
 function tireTaskDraftCarOptions(row){
-  const q=String(row.search||'').trim().toLocaleUpperCase('cs-CZ');
-  let cars=(D.cars||[]).filter(c=>!q||[c.plate,c.name,c.vin].join(' ').toLocaleUpperCase('cs-CZ').includes(q));
-  const selected=(D.cars||[]).find(c=>c.id===row.carId);
-  if(selected&&!cars.some(c=>c.id===selected.id))cars=[selected,...cars];
-  return '<option value="">'+(cars.length?'Vyber vozidlo…':'Žádné vozidlo nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'" '+(c.id===row.carId?'selected':'')+'>'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');
+  const q=String(row.search||'').trim().toLocaleUpperCase('cs-CZ'),category=String(row.category||'');
+  const cars=(D.cars||[]).filter(c=>(!category||c.category===category)&&(!q||[c.plate,c.name,c.vin,c.category].join(' ').toLocaleUpperCase('cs-CZ').includes(q)));
+  const label=cars.length?'Vyber vozidlo…':category?'Ve skupině nejsou odpovídající vozidla':'Žádné vozidlo nenalezeno';
+  return '<option value="">'+label+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'" '+(c.id===row.carId?'selected':'')+'>'+e(c.plate)+' — '+e(c.name||'')+(c.category?' · '+e(c.category):'')+'</option>').join('');
 }
 function collectTireTaskDraftRows(){
   if(!$('tireTaskRows'))return tireTaskDraftRows;
@@ -561,10 +560,10 @@ function renderTireTaskDraft(){
   document.querySelectorAll('.tiretask-plan-row').forEach(el=>{
     const key=el.dataset.key,row=tireTaskDraftRows.find(x=>x.key===key);
     const search=el.querySelector('.tt-plan-search'),carSel=el.querySelector('.tt-plan-car'),catSel=el.querySelector('.tt-plan-category');
-    search.oninput=()=>{row.search=search.value;row.carId=carSel.value;carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId)carSel.value=row.carId};
-    carSel.onchange=()=>{row.carId=carSel.value;const car=(D.cars||[]).find(c=>c.id===row.carId);if(car?.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category}};
+    search.oninput=()=>{row.search=search.value;row.carId=carSel.value;carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId&&[...carSel.options].some(o=>o.value===row.carId))carSel.value=row.carId;else row.carId=''};
+    carSel.onchange=()=>{row.carId=carSel.value;const car=(D.cars||[]).find(c=>c.id===row.carId);if(car?.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category;carSel.innerHTML=tireTaskDraftCarOptions(row);carSel.value=row.carId}};
     el.querySelector('.tt-plan-time').onchange=x=>row.time=x.target.value;
-    catSel.onchange=x=>row.category=x.target.value;
+    catSel.onchange=x=>{row.category=x.target.value;const selected=(D.cars||[]).find(c=>c.id===row.carId);if(selected&&row.category&&selected.category!==row.category)row.carId='';carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId)carSel.value=row.carId};
     el.querySelector('.tt-plan-season').onchange=x=>row.targetSeason=x.target.value;
   });
   document.querySelectorAll('.tt-plan-remove').forEach(b=>b.onclick=()=>{collectTireTaskDraftRows();tireTaskDraftRows=tireTaskDraftRows.filter(x=>x.key!==b.dataset.key);ensureTireTaskDraft();renderTireTaskDraft()});
