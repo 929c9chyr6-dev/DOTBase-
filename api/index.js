@@ -1515,6 +1515,31 @@ export default async function handler(req, res) {
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
 
+    if (body.action === 'adminUserProfile') {
+      const target=cfg.users.find((u)=>u.id===String(body.userId||''));
+      if(!target)return json(res,404,{error:'USER'});
+      const [recordRows,taskRows,auditRows,presence]=await Promise.all([getRecords(),getTireTasks(),getAudit(),getPresence()]);
+      const records=enrichRecords(cfg,recordRows).filter((r)=>r.userId===target.id);
+      const tasks=publicTireTasks(cfg,taskRows,recordRows).filter((t)=>
+        t.assignedToUserId===target.id||t.acceptedById===target.id||t.startedById===target.id||t.completedById===target.id||t.closedById===target.id||
+        (Array.isArray(t.activity)&&t.activity.some((a)=>a.userId===target.id))
+      );
+      const audit=auditRows.filter((a)=>a.actorId===target.id).slice(0,150).map((a)=>({id:a.id,createdAt:a.createdAt,action:a.action,summary:a.summary}));
+      const workTimes=[
+        ...records.map((r)=>Date.parse(r.createdAt||0)),
+        ...tasks.flatMap((t)=>[t.acceptedAt,t.startedAt,t.completedAt,t.closedAt,t.updatedAt].map((x)=>Date.parse(x||0))),
+        ...audit.map((a)=>Date.parse(a.createdAt||0))
+      ].filter(Number.isFinite);
+      const p=presenceFor(target.id,presence);
+      const completedTasks=tasks.filter((t)=>t.completedById===target.id).length;
+      const startedTasks=tasks.filter((t)=>t.startedById===target.id||(Array.isArray(t.activity)&&t.activity.some((a)=>a.userId===target.id&&a.type==='status'&&String(a.text||'').toLowerCase().includes('rozprac')))).length;
+      return json(res,200,{
+        user:{id:target.id,name:target.name,role:target.role,active:target.active!==false,createdAt:target.createdAt||null,lastLoginAt:target.lastLoginAt||null,presenceStatus:p.status,lastOnlineAt:p.lastOnlineAt,lastActivityAt:p.lastActivityAt},
+        stats:{records:records.length,tasksInvolved:tasks.length,tasksCompleted:completedTasks,tasksStarted:startedTasks,lastWorkAt:workTimes.length?new Date(Math.max(...workTimes)).toISOString():null},
+        records,tasks,audit
+      });
+    }
+
     if (body.action === 'adminForceLogoutAll') {
       const now=new Date().toISOString();
       cfg.sessionGeneration=Math.max(0,Math.floor(Number(cfg.sessionGeneration)||0))+1;

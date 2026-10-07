@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='',taskProblemTaskId=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='',taskProblemTaskId=null,adminUserProfileData=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -1351,7 +1351,7 @@ function renderAdminUsers(){
     const taskNotices='<div class="module-note" style="margin-top:9px"><b>🔔 TASK oznámení</b><label class="switchline"><input class="utaskaccepted" data-id="'+e(u.id)+'" type="checkbox" '+(u.taskNotifications?.accepted?'checked':'')+'><span><b>Přijetí TASKu</b><span class="small" style="display:block">Dostane oznámení, když přiřazený uživatel TASK přijme.</span></span></label></div>';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
     const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+taskNotices+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+taskNotices+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
@@ -1360,8 +1360,60 @@ function renderAdminUsers(){
     const taskNotifications={accepted:!!document.querySelector('.utaskaccepted[data-id="'+id+'"]')?.checked};
     try{await api('adminUpdateUser',{userId:id,name:n,role,permissions,taskNotifications});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
   });
+  document.querySelectorAll('.admin-user-profile').forEach(b=>b.onclick=()=>openAdminUserProfile(b.dataset.id));
   document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
+}
+
+function adminProfileTaskRoles(t,userId){
+  const roles=[];
+  if(t.assignedToUserId===userId)roles.push('Přiřazen');
+  if(t.acceptedById===userId)roles.push('Přijal');
+  if(t.startedById===userId)roles.push('Zahájil');
+  if(t.completedById===userId)roles.push('Dokončil');
+  if(t.closedById===userId)roles.push('Uzavřel');
+  if(!roles.length&&(t.activity||[]).some(a=>a.userId===userId))roles.push('Aktivita');
+  return roles;
+}
+function renderAdminUserProfile(){
+  const p=adminUserProfileData;if(!p||!$('adminUserProfileBody'))return;
+  const u=p.user||{},s=p.stats||{},records=p.records||[],tasks=p.tasks||[],audit=p.audit||[];
+  $('adminUserProfileTitle').textContent='👤 '+(u.name||'Profil uživatele');
+  $('adminUserProfileSub').textContent=roleLabel(u.role)+' · '+(u.active?'aktivní':'zablokovaný')+' · poslední přihlášení '+dt(u.lastLoginAt);
+  $('adminUserProfileExport').disabled=!records.length&&!tasks.length;
+  const stats='<div class="admin-profile-stats">'+
+    '<div><b>'+Number(s.records||0)+'</b><span>PNEU/DOT zápisů</span></div>'+
+    '<div><b>'+Number(s.tasksCompleted||0)+'</b><span>Dokončených TASKů</span></div>'+
+    '<div><b>'+Number(s.tasksStarted||0)+'</b><span>Zahájených TASKů</span></div>'+
+    '<div><b>'+Number(s.tasksInvolved||0)+'</b><span>TASKů s účastí</span></div>'+
+  '</div><div class="small admin-profile-meta">Poslední pracovní aktivita: '+dt(s.lastWorkAt)+' · '+(u.presenceStatus==='online'?'🟢 Online':u.presenceStatus==='standby'?'🟠 Standby':'⚪ Offline')+' · účet od '+dt(u.createdAt)+'</div>';
+  const taskRows=tasks.slice().sort((a,b)=>Date.parse(b.completedAt||b.closedAt||b.updatedAt||b.createdAt||0)-Date.parse(a.completedAt||a.closedAt||a.updatedAt||a.createdAt||0)).map(t=>{
+    const roles=adminProfileTaskRoles(t,u.id),season=t.targetSeason==='winter'?'❄️ Zimní':'☀️ Letní';
+    return '<div class="admin-profile-work"><div class="top"><div><b>📋 '+e(t.carPlate||'—')+'</b> · '+season+'<div class="small">'+e(t.carName||'')+' · plán '+e(t.date||'—')+' '+(t.time?e(t.time):'celý den')+'</div></div><span class="badge">'+e(tireTaskStatusMeta(t.status).label)+'</span></div>'+
+      '<div class="admin-profile-role">'+roles.map(r=>'<span>'+e(r)+'</span>').join('')+'</div>'+
+      '<div class="admin-profile-work-grid"><div><span>Přijato</span><b>'+dt(t.acceptedAt)+'</b></div><div><span>Zahájeno</span><b>'+dt(t.startedAt)+'</b></div><div><span>Dokončeno</span><b>'+dt(t.completedAt)+'</b></div><div><span>Uzavřeno</span><b>'+dt(t.closedAt)+'</b></div></div>'+
+      (t.completedRecordId?'<div class="small" style="margin-top:7px">DOT <b>'+e(t.completedDot||'—')+'</b> · '+Number(t.completedMileage??0).toLocaleString('cs-CZ')+' km · dokončil '+e(t.completedBy||'—')+'</div>':'')+
+    '</div>';
+  }).join('')||'<div class="small">Uživatel zatím nemá žádný TASK.</div>';
+  const recordRows=records.slice(0,150).map(r=>'<div class="admin-profile-work"><b>🛞 '+e(r.plate||'—')+'</b> · '+(r.season==='winter'?'❄️ Zimní':'☀️ Letní')+' · DOT <b>'+e(dotLabel(r))+'</b><div class="small">'+Number(r.mileage??0).toLocaleString('cs-CZ')+' km · '+e(r.vehicle||'')+' · '+dt(r.createdAt)+'</div></div>').join('')||'<div class="small">Uživatel zatím nemá žádný PNEU/DOT zápis.</div>';
+  const auditRows=audit.slice(0,60).map(a=>'<div class="audit-line"><b>'+e(a.summary||a.action)+'</b><div class="small">'+dt(a.createdAt)+' · '+e(a.action||'')+'</div></div>').join('')||'<div class="small">Bez další systémové aktivity.</div>';
+  $('adminUserProfileBody').innerHTML=stats+
+    '<div class="admin-profile-section"><h3>📋 TASKy a práce</h3>'+taskRows+'</div>'+
+    '<div class="admin-profile-section"><h3>🛞 PNEU / DOT zápisy</h3>'+recordRows+'</div>'+
+    '<details class="admin-profile-section"><summary><b>🧾 Další systémová aktivita</b></summary><div style="margin-top:8px">'+auditRows+'</div></details>';
+}
+async function openAdminUserProfile(id){
+  if(me?.role!=='admin'||!$('adminUserProfileOverlay'))return;
+  adminUserProfileData=null;$('adminUserProfileTitle').textContent='👤 Přehled profilu';$('adminUserProfileSub').textContent='Načítám pracovní historii…';$('adminUserProfileBody').innerHTML='<div class="small">Načítám data profilu…</div>';$('adminUserProfileExport').disabled=true;$('adminUserProfileOverlay').hidden=false;
+  try{adminUserProfileData=await api('adminUserProfile',{userId:id});renderAdminUserProfile()}catch(x){$('adminUserProfileBody').innerHTML='<div class="msg err">'+e(errorText(x))+'</div>'}
+}
+function closeAdminUserProfile(){adminUserProfileData=null;if($('adminUserProfileOverlay'))$('adminUserProfileOverlay').hidden=true}
+function exportAdminUserProfile(){
+  const p=adminUserProfileData;if(!p)return;const u=p.user||{},rows=[['Typ','SPZ','Vozidlo','Sada','Plán datum','Plán čas','Role uživatele','DOT','Kilometry','Datum zápisu','Přijato','Zahájeno','Dokončeno','Uzavřeno','Stav TASKu']];
+  for(const r of p.records||[])rows.push(['PNEU/DOT',r.plate||'',r.vehicle||'',r.season==='winter'?'Zimní':'Letní','','','Zapsal PNEU/DOT',dotLabel(r),r.mileage??'',dt(r.createdAt),'','','','']);
+  for(const t of p.tasks||[])rows.push(['TASK',t.carPlate||'',t.carName||'',t.targetSeason==='winter'?'Zimní':'Letní',t.date||'',t.time||'',adminProfileTaskRoles(t,u.id).join(' + '),t.completedDot||'',t.completedMileage??'','',dt(t.acceptedAt),dt(t.startedAt),dt(t.completedAt),dt(t.closedAt),tireTaskStatusMeta(t.status).label]);
+  const safe=String(u.name||'uzivatel').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'uzivatel';
+  downloadBlob('\uFEFF'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','Autoprovoz-Profil-'+safe+'-'+new Date().toISOString().slice(0,10)+'.csv');
 }
 
 function openAdminPinReset(id){
@@ -1373,6 +1425,9 @@ function openAdminPinReset(id){
 }
 function closeAdminPinReset(){pinResetAdminUserId=null;$('pinAdminResetOverlay').hidden=true;$('pinAdminResetMsg').innerHTML=''}
 $('pinAdminResetCancel').onclick=closeAdminPinReset;
+if($('adminUserProfileClose'))$('adminUserProfileClose').onclick=closeAdminUserProfile;
+if($('adminUserProfileExport'))$('adminUserProfileExport').onclick=exportAdminUserProfile;
+if($('adminUserProfileOverlay'))$('adminUserProfileOverlay').onclick=(ev)=>{if(ev.target===$('adminUserProfileOverlay'))closeAdminUserProfile()};
 $('pinAdminResetSubmit').onclick=async()=>{
   if(!pinResetAdminUserId)return;
   const u=(D.users||[]).find(x=>x.id===pinResetAdminUserId);if(!u)return closeAdminPinReset();
