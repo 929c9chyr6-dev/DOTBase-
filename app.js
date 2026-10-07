@@ -4,10 +4,8 @@ const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
   vehicleOverview:{label:'PŘEHLED VOZIDEL',icon:'🚗'},
-  service:{label:'SERVIS',icon:'🔧'},
   pneu:{label:'PNEU / DOT',icon:'🛞'},
   tiretask:{label:'TASK',icon:'📋'},
-  maintenance:{label:'ÚDRŽBA',icon:'🧽'},
   notifications:{label:'OZNÁMENÍ',icon:'🔔'},
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
 };
@@ -94,7 +92,7 @@ async function login(){
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
     if(tab==='admin')openModule('admin');
     else if(['entry','season','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
-    else if(['vehicleOverview','service','pneu','tiretask','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
+    else if(['vehicleOverview','pneu','tiretask','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
     const remaining=x.data?.attemptsRemaining;
@@ -700,7 +698,7 @@ function openModule(id){
   if(currentModule==='vehicleOverview')loadVehicleOverviewData(false).catch(()=>{});
   if(currentModule==='pneu')loadCurrentModuleData(false).catch(()=>{});
   if(currentModule==='admin'&&me?.role==='admin')loadAdminState(false).catch(x=>alert(errorText(x)));
-  if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
+  if(currentModule==='vehicleOverview'||currentModule==='settings')renderModuleShell();
   if(currentModule==='tiretask')loadTaskData(false).catch(()=>{});
   if(currentModule==='notifications')loadNotificationData(false).catch(()=>{});
   if(currentModule==='settings'){updatePushStatus();loadMyPushDevices();renderNotificationSettings()}
@@ -1019,20 +1017,8 @@ async function deleteVehicleCategory(category){
   if(!confirm('Opravdu smazat skupinu „'+category+'“?\n\nSmazání projde jen pokud ji nepoužívá žádné vozidlo ani aktivní TASK.'))return;
   try{await api('vehicleCategoryDelete',{category});await refresh()}catch(x){alert(errorText(x))}
 }
-function renderVehiclePreviews(target,kind){
-  const cars=(D.cars||[]).slice(0,80);
-  $(target).innerHTML=cars.map(car=>{
-    const l=latest(car.id),s=latest(car.id,'summer'),w=latest(car.id,'winter');
-    const extra=kind==='service'
-      ?'Aktuální km: '+(l?Number(l.mileage).toLocaleString('cs-CZ'):'—')+' · servisní profil doplníme'
-      :'Aktuální km: '+(l?Number(l.mileage).toLocaleString('cs-CZ'):'—')+' · údržbová evidence se připravuje';
-    return '<div class="vehicle-preview"><b>'+e(car.plate)+'</b> '+e(car.name||'')+'<div class="small">'+extra+'</div>'+(kind==='service'?'<div class="small">DOT: ☀️ '+e(s?.dot||'—')+' · ❄️ '+e(w?.dot||'—')+'</div>':'')+'</div>';
-  }).join('')||'<div class="small">Žádná aktivní vozidla.</div>';
-}
 function renderModuleShell(){
   renderVehicleOverview();
-  if($('serviceVehicles'))renderVehiclePreviews('serviceVehicles','service');
-  if($('maintenanceVehicles'))renderVehiclePreviews('maintenanceVehicles','maintenance');
   if($('settingsUser'))$('settingsUser').textContent=me?.name||'—';
   if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);if($('themeMode'))$('themeMode').value=themePreference();if($('themeCurrent'))$('themeCurrent').textContent=document.documentElement.dataset.theme==='dark'?'🌙 Tmavý':'☀️ Světlý';
   if($('homeNotificationBadge')){$('homeNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('homeNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
