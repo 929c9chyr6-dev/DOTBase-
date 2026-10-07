@@ -1346,23 +1346,39 @@ function renderAdminUsers(){
   $('users').innerHTML=(D.users||[]).map(u=>{
     const admin=u.role==='admin';
     const role=admin?'<span class="badge">Admin</span>':'<select class="ur" data-id="'+e(u.id)+'" style="max-width:160px"><option value="driver" '+(u.role==='driver'?'selected':'')+'>Driver</option><option value="dispatch" '+(u.role==='dispatch'?'selected':'')+'>Dispatch</option><option value="technician" '+(u.role==='technician'?'selected':'')+'>Technician</option><option value="test" '+(u.role==='test'?'selected':'')+'>TEST</option></select>';
-    const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Práva nastav níže a přístup k jednotlivým modulům v Admin → Moduly.</div></div>':'';
-    const perms=admin?'<div class="small" style="margin:9px 0"><b>Plný systémový přístup.</b> Tato práva nelze vypnout.</div>':'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
-    const taskNotices='<div class="module-note" style="margin-top:9px"><b>🔔 TASK oznámení</b><label class="switchline"><input class="utaskaccepted" data-id="'+e(u.id)+'" type="checkbox" '+(u.taskNotifications?.accepted?'checked':'')+'><span><b>Přijetí TASKu</b><span class="small" style="display:block">Dostane oznámení, když přiřazený uživatel TASK přijme.</span></span></label></div>';
+    const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Nastavíš je v Admin → Práva uživatelů a přístup k modulům v Admin → Moduly.</div></div>':'';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
     const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+taskNotices+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">💾 Uložit účet</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
     const role=u?.role==='admin'?'admin':document.querySelector('.ur[data-id="'+id+'"]').value;
-    const permissions={};if(role!=='admin')document.querySelectorAll('.uperm[data-id="'+id+'"]').forEach(x=>permissions[x.dataset.k]=x.checked);
-    const taskNotifications={accepted:!!document.querySelector('.utaskaccepted[data-id="'+id+'"]')?.checked};
-    try{await api('adminUpdateUser',{userId:id,name:n,role,permissions,taskNotifications});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
+    try{await api('adminUpdateUser',{userId:id,name:n,role});await refresh();alert('Účet uložen.')}catch(x){alert(errorText(x))}
   });
   document.querySelectorAll('.admin-user-profile').forEach(b=>b.onclick=()=>openAdminUserProfile(b.dataset.id));
   document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
+}
+function renderAdminUserPermissions(){
+  const root=$('userPermissions');if(!root)return;
+  root.innerHTML=(D.users||[]).map(u=>{
+    const admin=u.role==='admin';
+    const perms=admin
+      ?'<div class="admin-rights-full">🛡️ <b>Plný systémový přístup</b><div class="small">Admin má všechna systémová oprávnění vždy aktivní a nelze je vypnout.</div></div>'
+      :'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm-rights" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
+    const taskNotices='<div class="module-note admin-rights-notices"><b>🔔 TASK oznámení</b><label class="switchline"><input class="utaskaccepted-rights" data-id="'+e(u.id)+'" type="checkbox" '+(u.taskNotifications?.accepted?'checked':'')+'><span><b>Přijetí TASKu</b><span class="small" style="display:block">Dostane oznámení, když přiřazený uživatel TASK přijme.</span></span></label></div>';
+    return '<div class="admin-rights-user '+(u.role==='test'?'test-profile':'')+'"><div class="top"><div><b>'+e(u.name)+'</b><div class="small">'+e(roleLabel(u.role))+' · '+(u.active?'aktivní':'zablokovaný')+'</div></div><span class="badge">'+(admin?'ADMIN':e(roleLabel(u.role)).toUpperCase())+'</span></div>'+perms+taskNotices+'<button class="save-user-rights primary" data-id="'+e(u.id)+'" style="width:100%;margin-top:9px">💾 Uložit práva</button></div>';
+  }).join('')||'<div class="small">Nejsou žádní uživatelé.</div>';
+  document.querySelectorAll('.save-user-rights').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.id,u=(D.users||[]).find(x=>x.id===id);if(!u)return;
+    const payload={userId:id,taskNotifications:{accepted:!!document.querySelector('.utaskaccepted-rights[data-id="'+id+'"]')?.checked}};
+    if(u.role!=='admin'){
+      const permissions={};document.querySelectorAll('.uperm-rights[data-id="'+id+'"]').forEach(x=>permissions[x.dataset.k]=x.checked);payload.permissions=permissions;
+    }
+    b.disabled=true;
+    try{await api('adminUpdateUser',payload);await refresh();alert('Práva uživatele '+u.name+' byla uložena.')}catch(x){alert(errorText(x))}finally{b.disabled=false}
+  });
 }
 
 function adminProfileTaskRoles(t,userId){
@@ -1461,7 +1477,7 @@ function parseCsvLine(line,delimiter){const out=[];let cur='',q=false;for(let i=
 $('importCars').onclick=async()=>{const file=$('csvImport').files?.[0];if(!file)return note($('importMsg'),'Vyber CSV soubor.','msg err');const text=await file.text(),lines=text.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim());if(!lines.length)return;const delimiter=(lines[0].match(/;/g)||[]).length>=(lines[0].match(/,/g)||[]).length?';':',';let rows=lines.map(l=>parseCsvLine(l,delimiter));if(rows[0]&&/spz|plate/i.test(rows[0][0]))rows.shift();const payload=rows.map(r=>({plate:r[0],name:r[1]||''})).filter(r=>r.plate);try{const result=await api('adminImportCars',{rows:payload});note($('importMsg'),'Přidáno '+result.added+' aut, přeskočeno '+result.skipped+'.','msg ok');$('csvImport').value='';await refresh()}catch(x){note($('importMsg'),errorText(x),'msg err')}};
 $('backupJson').onclick=async()=>{try{const data=await api('adminBackup');downloadBlob(JSON.stringify(data,null,2),'application/json;charset=utf-8','DOT-Evidence-Backup-'+new Date().toISOString().slice(0,10)+'.json')}catch(x){alert(errorText(x))}};
 
-function renderAdmin(){renderAdminDashboard();renderModuleControls();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderAudit()}
+function renderAdmin(){renderAdminDashboard();renderModuleControls();renderAdminCars();renderAdminUsers();renderAdminUserPermissions();renderNotificationAdmin();renderAudit()}
 function allowedTab(id){return id==='entry'?can('dotCreate'):id==='season'?hasPneuAccess():id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):false}
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
