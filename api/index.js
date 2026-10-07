@@ -220,6 +220,14 @@ function safeEqualHex(a, b) {
   try { return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex')); }
   catch { return false; }
 }
+function migrateLegacyTwoDigitPinHash(hash) {
+  if(!hash)return hash;
+  for(let n=0;n<=99;n++){
+    const oldPin=String(n).padStart(2,'0');
+    if(safeEqualHex(hash,pinHash(oldPin)))return pinHash(oldPin.padStart(4,'0'));
+  }
+  return hash;
+}
 function sign(payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const sig = crypto.createHmac('sha256', SECRET).update(body).digest('base64url');
@@ -287,7 +295,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 14;
+  cfg.version = 15;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -299,6 +307,7 @@ function normalizeConfig(cfg) {
     if (u.active === undefined) u.active = true;
     if (!u.createdAt) u.createdAt = null;
     if (!u.lastLoginAt) u.lastLoginAt = null;
+    if(previousVersion<15)u.pinHash=migrateLegacyTwoDigitPinHash(u.pinHash);
     u.role = normalizeRole(u.role);
     u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
     u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
@@ -741,13 +750,15 @@ function recordPath({ ts, id, carId, season, dot, mileage, userId, dotFront='', 
 }
 function randomFreePin(cfg, excludeId = null) {
   const used = new Set(cfg.users.filter((u) => u.active && u.id !== excludeId).map((u) => u.pinHash));
-  const available = [];
-  for (let n = 0; n <= 99; n++) {
-    const p = String(n).padStart(2, '0');
-    if (!used.has(pinHash(p))) available.push(p);
+  for(let i=0;i<250;i++){
+    const p=String(crypto.randomInt(10000)).padStart(4,'0');
+    if(!used.has(pinHash(p)))return p;
   }
-  if (!available.length) return null;
-  return available[crypto.randomInt(available.length)];
+  for(let n=0;n<=9999;n++){
+    const p=String(n).padStart(4,'0');
+    if(!used.has(pinHash(p)))return p;
+  }
+  return null;
 }
 
 function normalizedTrafficText(v) {
@@ -944,7 +955,7 @@ export default async function handler(req, res) {
       const a = attempts.get(key) || { n: 0, blocked: 0 };
       if (a.blocked > Date.now()) return json(res, 429, { error: 'LOCKED', seconds: Math.ceil((a.blocked - Date.now()) / 1000) });
       const pin = String(body.pin || '');
-      if (!/^\d{2}$/.test(pin)) return json(res, 400, { error: 'PIN' });
+      if (!/^\d{4}$/.test(pin)) return json(res, 400, { error: 'PIN' });
       const cfg = await readConfig();
       const h = pinHash(pin);
       const u = cfg.users.find((x) => x.active && safeEqualHex(x.pinHash, h));
@@ -1650,7 +1661,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminAddUser') {
       const name = cleanText(body.name, 40), pin = String(body.pin || '');
       if (!name) return json(res, 400, { error: 'NAME' });
-      if (!/^\d{2}$/.test(pin)) return json(res, 400, { error: 'PIN' });
+      if (!/^\d{4}$/.test(pin)) return json(res, 400, { error: 'PIN' });
       const h = pinHash(pin);
       if (cfg.users.some((u) => u.active && safeEqualHex(u.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
       const role = NON_ADMIN_ROLES.includes(body.role) ? body.role : 'driver';
@@ -1668,7 +1679,7 @@ export default async function handler(req, res) {
       if (name) target.name = name;
       if (body.pin !== undefined && body.pin !== '') {
         const p = String(body.pin);
-        if (!/^\d{2}$/.test(p)) return json(res, 400, { error: 'PIN' });
+        if (!/^\d{4}$/.test(p)) return json(res, 400, { error: 'PIN' });
         const h = pinHash(p);
         if (cfg.users.some((x) => x.id !== target.id && x.active && safeEqualHex(x.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
         target.pinHash = h;
