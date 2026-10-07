@@ -374,25 +374,35 @@ function recordFromPath(pathname){
   const splitDot=!!(dotFront&&dotRear);
   return {path:pathname,ts:n,id,carId,season,dot,dotFront:splitDot?dotFront:'',dotRear:splitDot?dotRear:'',splitDot,mileage:Number(mileage),userId,createdAt:new Date(n).toISOString()};
 }
-function recordIndexRow(r,path){
-  return {...r,path:path||r.path||recordPath(r),createdAt:r.createdAt||new Date(r.ts).toISOString()};
+async function markRecordIndexDirty(){
+  const generation=Date.now().toString(36)+'-'+uid('ri');
+  await writeJson('records-index-meta.json',{generation,dirty:true,updatedAt:new Date().toISOString()});
 }
-async function rebuildRecordIndex(){
-  let blobs=[],cursor;
-  do{
-    const r=await list({prefix:'records/',limit:1000,cursor});
-    blobs.push(...r.blobs);cursor=r.hasMore?r.cursor:undefined;
-  }while(cursor&&blobs.length<10000);
-  const rows=blobs.map((b)=>recordFromPath(b.pathname)).filter(Boolean).sort((a,b)=>b.ts-a.ts);
-  await writeJson('records-index.json',rows);
-  return rows;
-}
-async function writeRecordIndex(rows){
-  await writeJson('records-index.json',(Array.isArray(rows)?rows:[]).filter(Boolean).sort((a,b)=>b.ts-a.ts).slice(0,10000));
+async function rebuildRecordIndex(maxAttempts=3){
+  let lastRows=[];
+  for(let attempt=0;attempt<maxAttempts;attempt++){
+    const before=await readJson('records-index-meta.json',{generation:'0',dirty:true});
+    let blobs=[],cursor;
+    do{
+      const r=await list({prefix:'records/',limit:1000,cursor});
+      blobs.push(...r.blobs);cursor=r.hasMore?r.cursor:undefined;
+    }while(cursor&&blobs.length<10000);
+    const rows=blobs.map((b)=>recordFromPath(b.pathname)).filter(Boolean).sort((a,b)=>b.ts-a.ts);
+    lastRows=rows;
+    const after=await readJson('records-index-meta.json',{generation:'0',dirty:true});
+    if(before.generation!==after.generation&&attempt<maxAttempts-1)continue;
+    await writeJson('records-index.json',rows);
+    const verify=await readJson('records-index-meta.json',{generation:'0',dirty:true});
+    if(verify.generation===after.generation){
+      await writeJson('records-index-meta.json',{generation:after.generation,dirty:false,updatedAt:new Date().toISOString()});
+      return rows;
+    }
+  }
+  return lastRows;
 }
 async function getRecords(){
-  const indexed=await readJson('records-index.json',null);
-  if(Array.isArray(indexed))return indexed.filter(Boolean).sort((a,b)=>b.ts-a.ts);
+  const [indexed,meta]=await Promise.all([readJson('records-index.json',null),readJson('records-index-meta.json',null)]);
+  if(Array.isArray(indexed)&&meta?.dirty===false)return indexed;
   return rebuildRecordIndex();
 }
 async function getAudit() { return await readJson('audit.json', []); }
@@ -1242,7 +1252,7 @@ export default async function handler(req, res) {
       const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage, userId: currentUser.id };
       const newRecordPath=recordPath(r);
       await put(newRecordPath,'1',{access:'private',addRandomSuffix:false,contentType:'text/plain'});
-      const recordIndex=await getRecords();recordIndex.unshift(recordIndexRow(r,newRecordPath));await writeRecordIndex(recordIndex);
+      await markRecordIndexDirty();
       touchCar(car,currentUser,new Date(r.ts).toISOString());
       await writeConfig(cfg);
       const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
@@ -1542,7 +1552,7 @@ export default async function handler(req, res) {
       const newPath = recordPath(after);
       await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
       if(newPath!==r.path)await del(r.path);
-      const recIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(recIdx>=0)recs[recIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+      await markRecordIndexDirty();
       touchCar(car,currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${recordDotSummary(before)} → ${recordDotSummary(after)}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
@@ -1557,7 +1567,7 @@ export default async function handler(req, res) {
       const r = recs.find((x) => x.path === path);
       if (!r) return json(res, 404, { error: 'RECORD' });
       await del(path);
-      await writeRecordIndex(recs.filter((x)=>x.path!==path&&x.id!==r.id));
+      await markRecordIndexDirty();
       const car=cfg.cars.find((c)=>c.id===r.carId);
       touchCar(car,currentUser);
       await writeConfig(cfg);
@@ -1595,12 +1605,12 @@ export default async function handler(req, res) {
         const newPath = recordPath(after);
         await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
         if(newPath!==r.path)await del(r.path);
-        const recIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(recIdx>=0)recs[recIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+        await markRecordIndexDirty();
         await appendAudit(currentUser,'attention_issue_edit',`Opraveno upozornění ${car.plate}: ${issue.text}`,{issueKey,before,after:{...after,path:newPath}});
       } else {
         const r={ts:Date.now(),id:uid(),carId:car.id,season,dot,mileage,userId:currentUser.id},newPath=recordPath(r);
         await put(newPath,'1',{access:'private',addRandomSuffix:false,contentType:'text/plain'});
-        recs.unshift(recordIndexRow(r,newPath));await writeRecordIndex(recs);
+        await markRecordIndexDirty();
         await appendAudit(currentUser,'attention_issue_edit',`Doplněno z upozornění ${car.plate}: ${issue.text}`,{issueKey,record:r});
       }
       touchCar(car, currentUser);
@@ -1902,7 +1912,7 @@ export default async function handler(req, res) {
       const newPath = recordPath(after);
       await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
       if(newPath!==r.path)await del(r.path);
-      const adminRecIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(adminRecIdx>=0)recs[adminRecIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+      await markRecordIndexDirty();
       touchCar(car,currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
@@ -1915,7 +1925,7 @@ export default async function handler(req, res) {
       const recs = await getRecords();
       const r = recs.find((x) => x.path === path);
       await del(path);
-      if(r)await writeRecordIndex(recs.filter((x)=>x.path!==path&&x.id!==r.id));
+      if(r)await markRecordIndexDirty();
       const car=r?cfg.cars.find((c)=>c.id===r.carId):null;
       touchCar(car, currentUser);
       await writeConfig(cfg);
