@@ -147,7 +147,7 @@ function publicModules(cfg,currentUser){
 }
 function actionModule(action){
   if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (['tireTaskCreate','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
+  if (['tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['vehicleAdd','vehicleCategoryAdd'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices'].includes(action)) return 'settings';
@@ -381,7 +381,6 @@ async function patchNotification(id, patch) {
   await writeNotificationLog(rows);
   return n;
 }
-const TIRETASK_CATEGORIES = ['vip','manager','pool'];
 const TIRETASK_STATUSES = ['planned','in_progress','completed','problem','closed'];
 function pragueDate(value = Date.now()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Prague',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
@@ -394,6 +393,11 @@ function normalizeTaskTime(v) {
   const s=String(v||'').trim();
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(s)?s:'';
 }
+function normalizeTireTaskCategory(cfg,v){
+  const legacy=String(v||'').trim().toLowerCase();
+  const mapped=legacy==='manager'?'MANAŽER':legacy==='vip'?'VIP':legacy==='pool'?'POOL':cleanVehicleCategory(v);
+  return (cfg.vehicleCategories||[]).includes(mapped)?mapped:'';
+}
 function tireTaskCapabilities(user) {
   const admin=user?.role==='admin', dispatch=user?.role==='dispatch', technician=user?.role==='technician';
   const create=hasPermission(user,'tireTaskCreate'),edit=hasPermission(user,'tireTaskEdit');
@@ -405,7 +409,7 @@ function tireTaskCapabilities(user) {
     progress:admin||dispatch||technician,
     comment:true,
     close:admin||dispatch||technician,
-    delete:admin||dispatch,
+    delete:admin||dispatch||edit,
   };
 }
 async function getTireTasks() {
@@ -422,6 +426,7 @@ function publicTireTasks(cfg, rows) {
     const assignee=t.assignedToUserId?userById[t.assignedToUserId]:null;
     return {
       ...t,
+      category:normalizeTireTaskCategory(cfg,t.category)||cleanVehicleCategory(t.category)||'POOL',
       assignedToUserId:t.assignedToUserId||null,
       assignedToName:assignee?.name||'',
       assignedToRole:assignee?.role||'',
@@ -944,12 +949,52 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true, tireTaskCompleted:completedTask ? { id:completedTask.id } : null });
     }
 
+    if (body.action === 'tireTaskCreateBatch') {
+      const caps=tireTaskCapabilities(currentUser);
+      if(!caps.create)return json(res,403,{error:'PERMISSION'});
+      const date=normalizeTaskDate(body.date);
+      const rawEntries=Array.isArray(body.entries)?body.entries:[];
+      if(!rawEntries.length||rawEntries.length>6)return json(res,400,{error:'TIRETASK',message:'Denní plán musí obsahovat 1 až 6 vozidel.'});
+      const entries=rawEntries.slice(0,6);
+      const assignedToUserId=String(body.assignedToUserId||'').trim();
+      const assignee=assignedToUserId?cfg.users.find((u)=>u.id===assignedToUserId&&u.active!==false):null;
+      if(!date)return json(res,400,{error:'TIRETASK_DATE'});
+      if(assignedToUserId&&!assignee)return json(res,404,{error:'USER'});
+      const normalized=[];
+      for(const entry of entries){
+        const rawTime=String(entry?.time||'').trim(),time=rawTime?normalizeTaskTime(rawTime):'';
+        if(rawTime&&!time)return json(res,400,{error:'TIRETASK_TIME'});
+        const car=cfg.cars.find((x)=>x.id===String(entry?.carId||'')&&x.active!==false);
+        if(!car)return json(res,404,{error:'CAR'});
+        const category=normalizeTireTaskCategory(cfg,entry?.category)||normalizeTireTaskCategory(cfg,car.category);
+        if(!category)return json(res,400,{error:'VEHICLE_CATEGORY'});
+        const targetSeason=['summer','winter'].includes(entry?.targetSeason)?entry.targetSeason:'';
+        if(!targetSeason)return json(res,400,{error:'SEASON'});
+        normalized.push({time,car,category,targetSeason});
+      }
+      const now=new Date().toISOString(),batchId=uid('tb'),instructions=cleanText(body.instructions,700);
+      const created=normalized.map((entry,index)=>({
+        id:uid('tt'),batchId,batchIndex:index,date,time:entry.time,carId:entry.car.id,category:entry.category,targetSeason:entry.targetSeason,
+        assignedToUserId:assignee?.id||null,instructions,status:'planned',
+        createdAt:now,createdBy:currentUser.name,createdById:currentUser.id,
+        updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
+        comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:'Položka vytvořena v denním plánu '+(index+1)+'/'+normalized.length}],
+        completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
+        closedAt:null,closedBy:null,closedById:null,problemNote:''
+      }));
+      const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
+      await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TIRETASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
+      return json(res,200,{ok:true,batchId,count:created.length,tasks:publicTireTasks(cfg,created)});
+    }
+
     if (body.action === 'tireTaskCreate') {
       const caps=tireTaskCapabilities(currentUser);
       if(!caps.create)return json(res,403,{error:'PERMISSION'});
       const date=normalizeTaskDate(body.date),time=body.time?normalizeTaskTime(body.time):'';
       const car=cfg.cars.find((x)=>x.id===String(body.carId||'')&&x.active!==false);
-      const category=TIRETASK_CATEGORIES.includes(body.category)?body.category:'pool';
+      const requestedCategory=body.category===undefined?'':normalizeTireTaskCategory(cfg,body.category);
+      if(body.category!==undefined&&!requestedCategory)return json(res,400,{error:'VEHICLE_CATEGORY'});
+      const category=requestedCategory||normalizeTireTaskCategory(cfg,car?.category)||'POOL';
       const targetSeason=['summer','winter'].includes(body.targetSeason)?body.targetSeason:'';
       const assignedToUserId=String(body.assignedToUserId||'').trim();
       const assignee=assignedToUserId?cfg.users.find((u)=>u.id===assignedToUserId&&u.active!==false):null;
@@ -985,7 +1030,7 @@ export default async function handler(req, res) {
       if(body.date!==undefined){const v=normalizeTaskDate(body.date);if(!v)return json(res,400,{error:'TIRETASK_DATE'});task.date=v}
       if(body.time!==undefined){const raw=String(body.time||'').trim();const v=raw?normalizeTaskTime(raw):'';if(raw&&!v)return json(res,400,{error:'TIRETASK_TIME'});task.time=v}
       if(body.carId!==undefined){const car=cfg.cars.find((x)=>x.id===String(body.carId)&&x.active!==false);if(!car)return json(res,404,{error:'CAR'});task.carId=car.id}
-      if(body.category!==undefined&&TIRETASK_CATEGORIES.includes(body.category))task.category=body.category;
+      if(body.category!==undefined){const category=normalizeTireTaskCategory(cfg,body.category);if(!category)return json(res,400,{error:'VEHICLE_CATEGORY'});task.category=category}
       if(body.targetSeason!==undefined&&['summer','winter'].includes(body.targetSeason))task.targetSeason=body.targetSeason;
       if(body.assignedToUserId!==undefined){
         const assignedId=String(body.assignedToUserId||'').trim();

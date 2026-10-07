@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskCarSearch='',editingCarId=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const MODULE_META={
@@ -419,7 +419,10 @@ function renderTrafficPrefs(force=false){
 
 function localDateISO(d=new Date()){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day}
 function addDaysISO(base,n){const d=new Date(base+'T12:00:00');d.setDate(d.getDate()+n);return localDateISO(d)}
-function tireTaskCategoryLabel(v){return v==='vip'?'VIP':v==='manager'?'MANAŽER':'POOL'}
+function tireTaskCategoryLabel(v){
+  const raw=String(v||'').trim();
+  return raw.toLowerCase()==='manager'?'MANAŽER':raw.toLowerCase()==='vip'?'VIP':raw.toLowerCase()==='pool'?'POOL':raw||'—';
+}
 function tireTaskStatusMeta(v){
   return v==='in_progress'?{label:'ROZPRACOVÁNO',icon:'🔵'}:
     v==='completed'?{label:'HOTOVO',icon:'🟢'}:
@@ -435,15 +438,55 @@ function tireTaskRowsForView(){
   if(tireTaskView==='history')return rows.filter(t=>t.status==='closed'||t.date<today).sort((a,b)=>(String(b.closedAt||b.date)+' '+String(b.time||'')).localeCompare(String(a.closedAt||a.date)+' '+String(a.time||'')));
   return rows.filter(t=>t.date===today);
 }
-function fillTireTaskCars(){
-  if(!$('tireTaskCar'))return;
-  const cur=$('tireTaskCar').value,q=String(tireTaskCarSearch||'').trim().toLocaleUpperCase('cs-CZ');
+function newTireTaskDraftRow(seed={}){
+  return {key:String(++tireTaskDraftSeq),time:seed.time||'',carId:seed.carId||'',category:seed.category||'',targetSeason:seed.targetSeason||'winter',search:seed.search||''};
+}
+function ensureTireTaskDraft(){if(!tireTaskDraftRows.length)tireTaskDraftRows=[newTireTaskDraftRow()]}
+function tireTaskCategoryOptions(selected=''){
+  return '<option value="">Vyber skupinu…</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'" '+(x===selected?'selected':'')+'>'+e(x)+'</option>').join('');
+}
+function tireTaskDraftCarOptions(row){
+  const q=String(row.search||'').trim().toLocaleUpperCase('cs-CZ');
   let cars=(D.cars||[]).filter(c=>!q||[c.plate,c.name,c.vin].join(' ').toLocaleUpperCase('cs-CZ').includes(q));
-  const selected=(D.cars||[]).find(c=>c.id===cur);
+  const selected=(D.cars||[]).find(c=>c.id===row.carId);
   if(selected&&!cars.some(c=>c.id===selected.id))cars=[selected,...cars];
-  $('tireTaskCar').innerHTML='<option value="">'+(cars.length?'Vyber vozidlo…':'Žádné vozidlo nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+(c.vin?' · VIN '+e(c.vin):'')+'</option>').join('');
-  if(selected)$('tireTaskCar').value=cur;
-  if($('tireTaskCarCount'))$('tireTaskCarCount').textContent=q?(cars.length+' nalezeno'):'';
+  return '<option value="">'+(cars.length?'Vyber vozidlo…':'Žádné vozidlo nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'" '+(c.id===row.carId?'selected':'')+'>'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');
+}
+function collectTireTaskDraftRows(){
+  if(!$('tireTaskRows'))return tireTaskDraftRows;
+  document.querySelectorAll('.tiretask-plan-row').forEach(el=>{
+    const row=tireTaskDraftRows.find(x=>x.key===el.dataset.key);if(!row)return;
+    row.time=el.querySelector('.tt-plan-time')?.value||'';
+    row.search=el.querySelector('.tt-plan-search')?.value||'';
+    row.carId=el.querySelector('.tt-plan-car')?.value||'';
+    row.category=el.querySelector('.tt-plan-category')?.value||'';
+    row.targetSeason=el.querySelector('.tt-plan-season')?.value||'winter';
+  });
+  return tireTaskDraftRows;
+}
+function renderTireTaskDraft(){
+  if(!$('tireTaskRows'))return;
+  ensureTireTaskDraft();
+  $('tireTaskRows').innerHTML=tireTaskDraftRows.map((row,index)=>'<div class="tiretask-plan-row" data-key="'+e(row.key)+'">'+
+    '<div class="tiretask-plan-row-head"><b>Vozidlo '+(index+1)+'</b>'+(tireTaskDraftRows.length>1?'<button class="tt-plan-remove danger-btn" data-key="'+e(row.key)+'">✕ Odebrat</button>':'')+'</div>'+
+    '<div class="tiretask-plan-grid">'+
+      '<div><div class="filter-label">Čas</div><input class="tt-plan-time" type="time" value="'+e(row.time)+'"><div class="small" style="margin-top:3px">Prázdné = celý den</div></div>'+
+      '<div><div class="filter-label">Vozidlo</div><div class="search-wrap"><span class="search-icon">🔎</span><input class="tt-plan-search" type="search" autocomplete="off" value="'+e(row.search)+'" placeholder="Hledat podle SPZ…"></div><select class="tt-plan-car">'+tireTaskDraftCarOptions(row)+'</select></div>'+
+      '<div><div class="filter-label">Skupina</div><select class="tt-plan-category">'+tireTaskCategoryOptions(row.category)+'</select></div>'+
+      '<div><div class="filter-label">Přezout na</div><select class="tt-plan-season"><option value="winter" '+(row.targetSeason==='winter'?'selected':'')+'>❄️ Zimní</option><option value="summer" '+(row.targetSeason==='summer'?'selected':'')+'>☀️ Letní</option></select></div>'+
+    '</div></div>').join('');
+  $('tireTaskRowCount').textContent=tireTaskDraftRows.length+' / 6 vozidel';
+  $('addTireTaskRow').disabled=tireTaskDraftRows.length>=6;
+  document.querySelectorAll('.tiretask-plan-row').forEach(el=>{
+    const key=el.dataset.key,row=tireTaskDraftRows.find(x=>x.key===key);
+    const search=el.querySelector('.tt-plan-search'),carSel=el.querySelector('.tt-plan-car'),catSel=el.querySelector('.tt-plan-category');
+    search.oninput=()=>{row.search=search.value;row.carId=carSel.value;carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId)carSel.value=row.carId};
+    carSel.onchange=()=>{row.carId=carSel.value;const car=(D.cars||[]).find(c=>c.id===row.carId);if(car?.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category}};
+    el.querySelector('.tt-plan-time').onchange=x=>row.time=x.target.value;
+    catSel.onchange=x=>row.category=x.target.value;
+    el.querySelector('.tt-plan-season').onchange=x=>row.targetSeason=x.target.value;
+  });
+  document.querySelectorAll('.tt-plan-remove').forEach(b=>b.onclick=()=>{collectTireTaskDraftRows();tireTaskDraftRows=tireTaskDraftRows.filter(x=>x.key!==b.dataset.key);ensureTireTaskDraft();renderTireTaskDraft()});
 }
 function tireTaskAssignableOptions(selected=''){
   return '<option value="">👥 Nepřiřazeno – společný úkol</option>'+(D.tireTaskAssignableUsers||[]).map(u=>'<option value="'+e(u.id)+'" '+(u.id===selected?'selected':'')+'>'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
@@ -475,7 +518,7 @@ function renderTireTask(){
   if(!$('tireTaskList'))return;
   const caps=tireTaskCaps(),today=localDateISO();
   if($('tireTaskCreateCard'))$('tireTaskCreateCard').hidden=!caps.create;
-  fillTireTaskCars();
+  renderTireTaskDraft();
   fillTireTaskAssignees();
   renderMyTireTasks();
   if($('tireTaskDate')&&!$('tireTaskDate').value)$('tireTaskDate').value=today;
@@ -508,7 +551,7 @@ function renderTireTask(){
     const commentForm=t.status!=='closed'&&caps.comment?'<div class="tiretask-comment-form"><input class="tt-comment-input" data-id="'+e(t.id)+'" maxlength="500" placeholder="Doplnit poznámku…"><button class="tt-comment secondary" data-id="'+e(t.id)+'">Přidat</button></div>':'';
     return '<div class="tiretask-card '+e(t.status)+'">'+
       '<div class="tiretask-head"><div><div class="tiretask-time">'+tireTaskTimeLabel(t)+'</div><div class="tiretask-plate">'+e(t.carPlate||'—')+'</div><div class="small">'+e(t.carName||'')+' · '+e(t.date||'')+'</div></div><span class="tiretask-status '+e(t.status)+'">'+sm.icon+' '+sm.label+'</span></div>'+
-      '<div class="tiretask-badges"><span class="tiretask-badge '+e(t.category)+'">'+e(tireTaskCategoryLabel(t.category))+'</span><span class="tiretask-badge '+e(t.targetSeason)+'">'+seasonLabel+'</span></div>'+
+      '<div class="tiretask-badges"><span class="tiretask-badge">'+e(tireTaskCategoryLabel(t.category))+'</span><span class="tiretask-badge '+e(t.targetSeason)+'">'+seasonLabel+'</span></div>'+
       (caps.edit?'<div><div class="filter-label">Přiřazeno</div><select class="tt-assignee-select" data-id="'+e(t.id)+'">'+tireTaskAssignableOptions(t.assignedToUserId||'')+'</select></div>':(t.assignedToName?'<div class="tiretask-assigned">👤 Přiřazeno: '+e(t.assignedToName)+'</div>':'<div class="small" style="margin:7px 0">👥 Společný úkol · nepřiřazeno</div>'))+
       (t.instructions?'<div class="tiretask-instructions"><b>Instrukce Dispatch</b><div style="margin-top:4px">'+e(t.instructions)+'</div></div>':'')+
       (t.problemNote?'<div class="tiretask-problem"><b>⚠ Problém</b><div>'+e(t.problemNote)+'</div></div>':'')+
@@ -550,8 +593,17 @@ async function editTireTask(id){
   const t=(D.tireTasks||[]).find(x=>x.id===id);if(!t)return;
   const date=prompt('Datum YYYY-MM-DD:',t.date);if(date===null)return;
   const time=prompt('Čas HH:MM (prázdné = celý den):',t.time||'');if(time===null)return;
+  const plate=prompt('SPZ vozidla:',t.carPlate||'');if(plate===null)return;
+  const normalizedPlate=plate.trim().replace(/\s+/g,'').toUpperCase();
+  const car=(D.cars||[]).find(c=>String(c.plate||'').replace(/\s+/g,'').toUpperCase()===normalizedPlate);
+  if(!car)return alert('Vozidlo s touto SPZ nebylo nalezeno.');
+  const categoryInput=prompt('Skupina vozidla:\n'+(D.vehicleCategories||[]).join(' · '),tireTaskCategoryLabel(t.category));if(categoryInput===null)return;
+  const category=(D.vehicleCategories||[]).find(x=>x.toLocaleUpperCase('cs-CZ')===categoryInput.trim().toLocaleUpperCase('cs-CZ'));
+  if(!category)return alert('Vyber existující skupinu vozidel.');
+  const sx=prompt('Přezout na: Z = zimní, L = letní',t.targetSeason==='summer'?'L':'Z');if(sx===null)return;
+  const targetSeason=/^l/i.test(sx)?'summer':/^z/i.test(sx)?'winter':null;if(!targetSeason)return alert('Zadej L nebo Z.');
   const instructions=prompt('Instrukce Dispatch:',t.instructions||'');if(instructions===null)return;
-  try{await api('tireTaskUpdate',{taskId:id,date,time,instructions});await refresh()}catch(x){alert(errorText(x))}
+  try{await api('tireTaskUpdate',{taskId:id,date,time,carId:car.id,category,targetSeason,instructions});await refresh()}catch(x){alert(errorText(x))}
 }
 function openPneuFromTireTask(id){
   const t=(D.tireTasks||[]).find(x=>x.id===id);if(!t)return;
@@ -937,13 +989,24 @@ if($('addTrafficCorridor'))$('addTrafficCorridor').onclick=async()=>{
 };
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+if($('addTireTaskRow'))$('addTireTaskRow').onclick=()=>{collectTireTaskDraftRows();if(tireTaskDraftRows.length>=6)return;tireTaskDraftRows.push(newTireTaskDraftRow());renderTireTaskDraft()};
 if($('createTireTask'))$('createTireTask').onclick=async()=>{
-  const data={date:$('tireTaskDate').value,time:$('tireTaskTime').value,carId:$('tireTaskCar').value,category:$('tireTaskCategory').value,targetSeason:$('tireTaskSeason').value,assignedToUserId:$('tireTaskAssignee').value,instructions:$('tireTaskInstructions').value.trim()};
-  if(!data.date||!data.carId)return note($('tireTaskCreateMsg'),'Doplň datum a vozidlo. Čas je volitelný.','msg err');
-  try{await api('tireTaskCreate',data);$('tireTaskInstructions').value='';$('tireTaskAssignee').value='';note($('tireTaskCreateMsg'),data.assignedToUserId?'TireTask byl vytvořen a přiřazen.':'TireTask byl vytvořen.','msg ok');tireTaskView=data.date===localDateISO()?'today':data.date===addDaysISO(localDateISO(),1)?'tomorrow':'week';await refresh();setTimeout(()=>$('tireTaskCreateMsg').innerHTML='',1800)}catch(x){note($('tireTaskCreateMsg'),errorText(x),'msg err')}
+  const date=$('tireTaskDate').value,rows=collectTireTaskDraftRows();
+  const entries=rows.map(r=>({time:r.time,carId:r.carId,category:r.category,targetSeason:r.targetSeason}));
+  if(!date)return note($('tireTaskCreateMsg'),'Vyber datum plánu.','msg err');
+  if(!entries.length||entries.length>6)return note($('tireTaskCreateMsg'),'Plán musí obsahovat 1 až 6 vozidel.','msg err');
+  const incomplete=entries.findIndex(r=>!r.carId||!r.category||!['summer','winter'].includes(r.targetSeason));
+  if(incomplete>=0)return note($('tireTaskCreateMsg'),'Doplň vozidlo a skupinu u řádku '+(incomplete+1)+'.','msg err');
+  const data={date,entries,assignedToUserId:$('tireTaskAssignee').value,instructions:$('tireTaskInstructions').value.trim()};
+  try{
+    const result=await api('tireTaskCreateBatch',data);
+    tireTaskDraftRows=[newTireTaskDraftRow()];$('tireTaskInstructions').value='';$('tireTaskAssignee').value='';
+    note($('tireTaskCreateMsg'),'✅ Denní plán byl vytvořen · '+result.count+' vozidel.','msg ok');
+    tireTaskView=date===localDateISO()?'today':date===addDaysISO(localDateISO(),1)?'tomorrow':'week';
+    await refresh();setTimeout(()=>$('tireTaskCreateMsg').innerHTML='',2200)
+  }catch(x){note($('tireTaskCreateMsg'),errorText(x),'msg err')}
 };
 document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.onclick=()=>{tireTaskView=b.dataset.tiretaskView;renderTireTask()});
-if($('tireTaskCarSearch'))$('tireTaskCarSearch').oninput=()=>{tireTaskCarSearch=$('tireTaskCarSearch').value;fillTireTaskCars()};
 if($('vehicleOverviewSearch'))$('vehicleOverviewSearch').oninput=renderVehicleOverview;
 if($('vehicleOverviewCategory'))$('vehicleOverviewCategory').onchange=renderVehicleOverview;
 if($('vehicleOverviewAddCar'))$('vehicleOverviewAddCar').onclick=async()=>{
