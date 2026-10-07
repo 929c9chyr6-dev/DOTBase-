@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[];
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -47,11 +47,21 @@ function lockApp(message='',cls='msg'){
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
   if(message)note($('loginMsg'),message,cls);$('pin').focus();
 }
+async function loadLoginUsers(){
+  if(!$('loginUser'))return;
+  try{
+    const r=await api('loginUsers');loginUsers=r.users||[];
+    const selected=localStorage.getItem('lastLoginUserId')||'';
+    $('loginUser').innerHTML='<option value="">Vyber uživatele…</option>'+loginUsers.map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
+    if(loginUsers.some(u=>u.id===selected))$('loginUser').value=selected;
+  }catch{$('loginUser').innerHTML='<option value="">Uživatele se nepodařilo načíst</option>'}
+}
 async function login(){
-  const p=$('pin').value.replace(/\D/g,'').slice(0,4);$('pin').value=p;
+  const userId=$('loginUser').value,p=$('pin').value.replace(/\D/g,'').slice(0,4);$('pin').value=p;
+  if(!userId)return note($('loginMsg'),'Vyber svůj účet.','msg err');
   if(p.length!==4)return note($('loginMsg'),'Kód má 4 číslice.','msg err');
   try{
-    const r=await api('login',{pin:p});tok=r.token;me=r.user;lastInteraction=Date.now();$('login').hidden=true;$('pin').value='';
+    const r=await api('login',{userId,pin:p});tok=r.token;me=r.user;localStorage.setItem('lastLoginUserId',userId);lastInteraction=Date.now();$('login').hidden=true;$('pin').value='';
     if(r.pinChangeRequired?.required){showPinChangeScreen(r.pinChangeRequired);return}
     $('main').hidden=false;
     await refresh();await heartbeat();await updatePushStatus();loadTrafficReport(false).catch(()=>{});
@@ -62,8 +72,12 @@ async function login(){
     else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
-    const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?errorText(x):'Špatný kód.';
-    note($('loginMsg'),msg,x.code==='MAINTENANCE'?'msg warn':'msg err');
+    const remaining=x.data?.attemptsRemaining;
+    const msg=x.code==='ACCOUNT_LOCKED'?(x.data?.message||'Účet je zablokovaný. Kontaktuj administrátora.'):
+      x.code==='LOCKED'?'Přihlášení Admina je na 10 minut pozastavené.':
+      x.code==='BAD_PIN'?'Špatný PIN.'+(Number.isFinite(remaining)?' Zbývá '+remaining+' '+(remaining===1?'pokus.':'pokusy.'):''):
+      x.code==='MAINTENANCE'?errorText(x):errorText(x);
+    note($('loginMsg'),msg,(x.code==='MAINTENANCE'||x.code==='ACCOUNT_LOCKED')?'msg warn':'msg err');
   }
 }
 function showPinChangeScreen(reset){
@@ -1003,7 +1017,8 @@ function renderAdminUsers(){
     const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Práva nastav níže a přístup k jednotlivým modulům v Admin → Moduly.</div></div>':'';
     const perms=admin?'<div class="small" style="margin:9px 0"><b>Plný systémový přístup.</b> Tato práva nelze vypnout.</div>':'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+pinReset+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
@@ -1018,6 +1033,7 @@ function renderAdminUsers(){
 function openAdminPinReset(id){
   const u=(D.users||[]).find(x=>x.id===id);if(!u)return;
   pinResetAdminUserId=id;$('pinAdminResetUser').textContent=u.name;
+  $('pinAdminResetLead').textContent=u.loginLockedAt?'Tento účet je zablokovaný po 3 chybných pokusech. Odesláním výzvy se účet odemkne a uživatel bude muset dokončit změnu PINu.':'Účet bude po přihlášení uzamčený pouze na obrazovku změny PINu. Stávající PIN se tímto krokem nemění.';
   $('pinAdminRequireOld').value=u.pinChangeRequired?.required&&u.pinChangeRequired.requireOldPin===false?'no':'yes';
   $('pinAdminResetMsg').innerHTML='';$('pinAdminResetOverlay').hidden=false;
 }
@@ -1210,5 +1226,5 @@ setInterval(()=>{
 },60000);
 setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))refresh()},12000);
 setInterval(heartbeat,45000);
-applyTheme();if('serviceWorker'in navigator)ensureSW().catch(()=>{});
+applyTheme();loadLoginUsers();if('serviceWorker'in navigator)ensureSW().catch(()=>{});
 })();

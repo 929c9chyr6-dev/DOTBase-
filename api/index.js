@@ -295,7 +295,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 16;
+  cfg.version = 17;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -312,6 +312,9 @@ function normalizeConfig(cfg) {
     u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
     u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
     u.pinChangeRequired = normalizePinChangeRequired(u.pinChangeRequired);
+    u.failedPinAttempts = Math.max(0, Math.min(3, Number(u.failedPinAttempts) || 0));
+    u.lastFailedPinAt = u.lastFailedPinAt || null;
+    u.loginLockedAt = u.loginLockedAt || null;
     if (u.role !== 'admin') {
       u.permissions ||= {};
       if (previousVersion < 11 && u.role === 'dispatch') {
@@ -656,6 +659,7 @@ function userStats(cfg, recs, pushes, presence) {
     return {
       id: u.id, name: u.name, role: u.role, active: u.active, createdAt: u.createdAt || null,
       lastLoginAt: u.lastLoginAt || null, pinChangeRequired: normalizePinChangeRequired(u.pinChangeRequired),
+      failedPinAttempts: Number(u.failedPinAttempts) || 0, lastFailedPinAt: u.lastFailedPinAt || null, loginLockedAt: u.loginLockedAt || null,
       recordCount: own.length, lastRecordAt: own[0]?.createdAt || null,
       pushDevices: pushes.filter((x) => x.userId === u.id).length,
       permissions: effectivePermissions(u),
@@ -943,6 +947,28 @@ async function sendPushToUsers(cfg, userIds, payload) {
   return { sent, failed, devices: targets.length };
 }
 
+async function notifyAdminsAccountLocked(cfg,user,req) {
+  const admins=cfg.users.filter((u)=>u.active&&u.role==='admin');
+  if(!admins.length)return {sent:0,failed:0,devices:0};
+  const n=await createNotification({
+    type:'security_account_locked',channel:'admin',severity:'important',requiresAck:true,
+    title:'Účet zablokován – '+user.name,
+    body:'Účet byl zablokován po 3 chybných pokusech o PIN. Ověř fyzicky, co se stalo, a potom použij reset PINu v Admin → Uživatelé.',
+    recipient:'admins',recipientUserIds:admins.map((u)=>u.id),byUserId:'system',byUserName:'Bezpečnost'
+  });
+  const result=await sendPushToUsers(cfg,admins.map((u)=>u.id),{
+    title:'🔒 Účet zablokován – '+user.name,
+    body:'3 chybné pokusy o PIN. Zkontroluj situaci a proveď reset PINu.',
+    tag:'account-lock-'+user.id,url:'/?tab=admin'
+  });
+  await patchNotification(n.id,result);
+  await appendAudit(null,'login_account_locked','Účet '+user.name+' zablokován po 3 chybných PIN pokusech',{
+    userId:user.id,lockedAt:user.loginLockedAt,lastFailedPinAt:user.lastFailedPinAt,
+    sourceIp:ip(req),userAgent:cleanText(req.headers['user-agent'],180),notificationId:n.id,...result
+  });
+  return result;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'METHOD' });
   let body = req.body;
@@ -950,31 +976,63 @@ export default async function handler(req, res) {
   body ||= {};
 
   try {
+    if (body.action === 'loginUsers') {
+      const cfg=await readConfig();
+      return json(res,200,{users:cfg.users.filter((u)=>u.active).map((u)=>({id:u.id,name:u.name,role:u.role}))});
+    }
+
     if (body.action === 'login') {
-      const key = ip(req);
-      const a = attempts.get(key) || { n: 0, blocked: 0 };
-      if (a.blocked > Date.now()) return json(res, 429, { error: 'LOCKED', seconds: Math.ceil((a.blocked - Date.now()) / 1000) });
-      const pin = String(body.pin || '');
-      if (!/^\d{4}$/.test(pin)) return json(res, 400, { error: 'PIN' });
-      const cfg = await readConfig();
-      const h = pinHash(pin);
-      const u = cfg.users.find((x) => x.active && safeEqualHex(x.pinHash, h));
-      if (!u) {
-        a.n += 1;
-        if (a.n >= 5) { a.blocked = Date.now() + 10 * 60 * 1000; a.n = 0; }
-        attempts.set(key, a);
-        await new Promise((r) => setTimeout(r, 450));
-        return json(res, 401, { error: 'BAD_PIN' });
+      const userId=String(body.userId||''),pin=String(body.pin||'');
+      if(!userId)return json(res,400,{error:'USER',message:'Vyber uživatele.'});
+      if(!/^\d{4}$/.test(pin))return json(res,400,{error:'PIN'});
+      const cfg=await readConfig();
+      const u=cfg.users.find((x)=>x.id===userId&&x.active);
+      if(!u)return json(res,404,{error:'USER'});
+      if(u.role!=='admin'&&u.loginLockedAt){
+        return json(res,423,{error:'ACCOUNT_LOCKED',message:'Účet je zablokovaný po 3 chybných pokusech. Kontaktuj administrátora.',lockedAt:u.loginLockedAt});
       }
-      attempts.delete(key);
-      const sys = systemState(cfg);
-      if (u.role !== 'admin' && sys.mode === 'maintenance') {
-        return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
+
+      const adminKey='admin:'+u.id+':'+ip(req);
+      const adminAttempt=attempts.get(adminKey)||{n:0,blocked:0};
+      if(u.role==='admin'&&adminAttempt.blocked>Date.now()){
+        return json(res,429,{error:'LOCKED',seconds:Math.ceil((adminAttempt.blocked-Date.now())/1000)});
       }
-      u.lastLoginAt = new Date().toISOString();
+
+      const good=safeEqualHex(u.pinHash,pinHash(pin));
+      if(!good){
+        await new Promise((r)=>setTimeout(r,450));
+        if(u.role==='admin'){
+          adminAttempt.n+=1;
+          if(adminAttempt.n>=3){adminAttempt.blocked=Date.now()+10*60*1000;adminAttempt.n=0}
+          attempts.set(adminKey,adminAttempt);
+          return json(res,401,{error:'BAD_PIN',attemptsRemaining:adminAttempt.blocked>Date.now()?0:Math.max(0,3-adminAttempt.n)});
+        }
+        u.failedPinAttempts=Math.min(3,(Number(u.failedPinAttempts)||0)+1);
+        u.lastFailedPinAt=new Date().toISOString();
+        const attemptsRemaining=Math.max(0,3-u.failedPinAttempts);
+        if(u.failedPinAttempts>=3){
+          u.loginLockedAt=u.lastFailedPinAt;
+          await writeConfig(cfg);
+          await notifyAdminsAccountLocked(cfg,u,req);
+          return json(res,423,{error:'ACCOUNT_LOCKED',message:'Účet byl po 3 chybných pokusech zablokován. Kontaktuj administrátora.',attemptsRemaining:0,lockedAt:u.loginLockedAt});
+        }
+        await writeConfig(cfg);
+        await appendAudit(null,'login_pin_failed','Chybný PIN pro účet '+u.name,{userId:u.id,attempt:u.failedPinAttempts,attemptsRemaining,at:u.lastFailedPinAt});
+        return json(res,401,{error:'BAD_PIN',attemptsRemaining});
+      }
+
+      attempts.delete(adminKey);
+      u.failedPinAttempts=0;
+      u.lastFailedPinAt=null;
+      const sys=systemState(cfg);
+      if(u.role!=='admin'&&sys.mode==='maintenance'){
+        await writeConfig(cfg);
+        return json(res,423,{error:'MAINTENANCE',message:sys.message||defaultSystemMessage('maintenance')});
+      }
+      u.lastLoginAt=new Date().toISOString();
       await writeConfig(cfg);
-      const token = sign({ uid: u.id, role: u.role, exp: Date.now() + 12 * 60 * 60 * 1000 });
-      return json(res, 200, { token, user: { id: u.id, name: u.name, role: u.role }, pinChangeRequired: normalizePinChangeRequired(u.pinChangeRequired) });
+      const token=sign({uid:u.id,role:u.role,exp:Date.now()+12*60*60*1000});
+      return json(res,200,{token,user:{id:u.id,name:u.name,role:u.role},pinChangeRequired:normalizePinChangeRequired(u.pinChangeRequired)});
     }
 
     const session = auth(req);
@@ -1718,10 +1776,14 @@ export default async function handler(req, res) {
       if(target.role==='admin')return json(res,403,{error:'ADMIN_PIN_RESET',message:'Povinnou změnu PINu nelze tímto způsobem nastavit Admin účtu.'});
       if(target.active===false)return json(res,409,{error:'USER_BLOCKED',message:'Nejdřív účet aktivuj, aby se uživatel mohl přihlásit a změnu dokončit.'});
       const requireOldPin=body.requireOldPin!==false,now=new Date().toISOString();
+      const wasLocked=!!target.loginLockedAt;
       target.pinChangeRequired={required:true,requireOldPin,requestedAt:now,requestedBy:currentUser.name,requestedById:currentUser.id};
+      target.failedPinAttempts=0;
+      target.lastFailedPinAt=null;
+      target.loginLockedAt=null;
       await writeConfig(cfg);
       const push=await sendPushToUsers(cfg,[target.id],{title:'🔐 Nutná změna PINu',body:'Při příštím přihlášení bude nutné nastavit nový PIN.',tag:'pin-reset-'+target.id,url:'/'});
-      await appendAudit(currentUser,'user_pin_reset_request',`Vyžádána změna PINu pro ${target.name}`,{userId:target.id,requireOldPin,...push});
+      await appendAudit(currentUser,'user_pin_reset_request',`Vyžádána změna PINu pro ${target.name}`,{userId:target.id,requireOldPin,unlockedAfterFailedAttempts:wasLocked,...push});
       return json(res,200,{ok:true,requireOldPin,...push});
     }
 
