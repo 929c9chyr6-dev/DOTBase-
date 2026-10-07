@@ -331,10 +331,12 @@ async function getRecords() {
     const file = b.pathname.split('/').pop().replace(/\.rec$/, '');
     const p = file.split('_');
     if (p.length < 7) return null;
-    const [ts, id, carId, season, dot, mileage, userId] = p;
+    const [ts, id, carId, season, dot, mileage, userId, dotFrontRaw, dotRearRaw] = p;
     const n = Number(ts);
     if (!Number.isFinite(n)) return null;
-    return { path: b.pathname, ts: n, id, carId, season, dot, mileage: Number(mileage), userId, createdAt: new Date(n).toISOString() };
+    const dotFront=/^\d{4}$/.test(dotFrontRaw||'')?dotFrontRaw:'',dotRear=/^\d{4}$/.test(dotRearRaw||'')?dotRearRaw:'';
+    const splitDot=!!(dotFront&&dotRear);
+    return { path: b.pathname, ts: n, id, carId, season, dot, dotFront:splitDot?dotFront:'', dotRear:splitDot?dotRear:'', splitDot, mileage: Number(mileage), userId, createdAt: new Date(n).toISOString() };
   }).filter(Boolean).sort((a, b) => b.ts - a.ts);
 }
 async function getAudit() { return await readJson('audit.json', []); }
@@ -450,7 +452,7 @@ async function completeMatchingTireTask(cfg, record, user, preferredTaskId = nul
   t.status='completed';
   t.completedRecordId=record.id;
   t.completedRecordPath=recordPath(record);
-  t.completedDot=record.dot;
+  t.completedDot=recordDotSummary(record);
   t.completedMileage=record.mileage;
   t.completedAt=now;
   t.completedBy=user?.name||'Neznámý';
@@ -459,7 +461,7 @@ async function completeMatchingTireTask(cfg, record, user, preferredTaskId = nul
   t.updatedBy=user?.name||'Neznámý';
   t.updatedById=user?.id||null;
   t.activity=Array.isArray(t.activity)?t.activity:[];
-  t.activity.push({id:uid('ta'),type:'dot_linked',at:now,userId:user?.id||null,userName:user?.name||'Neznámý',text:`PNEU/DOT záznam propojen: DOT ${record.dot} · ${Number(record.mileage).toLocaleString('cs-CZ')} km`});
+  t.activity.push({id:uid('ta'),type:'dot_linked',at:now,userId:user?.id||null,userName:user?.name||'Neznámý',text:`PNEU/DOT záznam propojen: DOT ${recordDotSummary(record)} · ${Number(record.mileage).toLocaleString('cs-CZ')} km`});
   t.activity=t.activity.slice(-200);
   await writeTireTasks(rows);
   return t;
@@ -501,8 +503,8 @@ function buildVehicleOverview(cfg, recs) {
       latestMileage: latest?.mileage ?? null,
       latestRecordAt: latest?.createdAt || null,
       latestRecordBy: latest?.userName || null,
-      summer: summer ? { dot:summer.dot, mileage:summer.mileage, createdAt:summer.createdAt, userName:summer.userName } : null,
-      winter: winter ? { dot:winter.dot, mileage:winter.mileage, createdAt:winter.createdAt, userName:winter.userName } : null,
+      summer: summer ? { dot:summer.dot, dotFront:summer.dotFront||'', dotRear:summer.dotRear||'', splitDot:!!summer.splitDot, mileage:summer.mileage, createdAt:summer.createdAt, userName:summer.userName } : null,
+      winter: winter ? { dot:winter.dot, dotFront:winter.dotFront||'', dotRear:winter.dotRear||'', splitDot:!!winter.splitDot, mileage:winter.mileage, createdAt:winter.createdAt, userName:winter.userName } : null,
     };
   }).sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'cs'));
 }
@@ -640,15 +642,25 @@ async function publicState(cfg, recs, currentUser) {
     modulesAdmin: normalizeModules(cfg.modules),
   };
 }
-function validateRecordFields(car, season, dot, mileage) {
+function validDotValue(dot){
+  return /^\d{4}$/.test(dot) && Number(dot.slice(0,2))>=1 && Number(dot.slice(0,2))<=53;
+}
+function validateRecordFields(car, season, dot, mileage, splitDot=false, dotFront='', dotRear='') {
   if (!car) return 'CAR';
   if (!['summer', 'winter'].includes(season)) return 'SEASON';
-  if (!/^\d{4}$/.test(dot) || Number(dot.slice(0, 2)) < 1 || Number(dot.slice(0, 2)) > 53) return 'DOT';
+  if (splitDot) {
+    if (!validDotValue(dotFront) || !validDotValue(dotRear)) return 'DOT';
+  } else if (!validDotValue(dot)) return 'DOT';
   if (!Number.isInteger(mileage) || mileage < 0 || mileage > 9_999_999) return 'MILEAGE';
   return null;
 }
-function recordPath({ ts, id, carId, season, dot, mileage, userId }) {
-  return `records/${[ts, id, carId, season, dot, mileage, userId].join('_')}.rec`;
+function recordDotSummary(record){
+  return record?.dotFront&&record?.dotRear ? `PŘ ${record.dotFront} / Z ${record.dotRear}` : String(record?.dot||'');
+}
+function recordPath({ ts, id, carId, season, dot, mileage, userId, dotFront='', dotRear='' }) {
+  const parts=[ts,id,carId,season,dot,mileage,userId];
+  if(dotFront&&dotRear)parts.push(dotFront,dotRear);
+  return `records/${parts.join('_')}.rec`;
 }
 function randomFreePin(cfg, excludeId = null) {
   const used = new Set(cfg.users.filter((u) => u.active && u.id !== excludeId).map((u) => u.pinHash));
@@ -917,15 +929,17 @@ export default async function handler(req, res) {
     if (body.action === 'addRecord') {
       if (!hasPermission(currentUser, 'dotCreate')) return json(res, 403, { error: 'PERMISSION' });
       const car = cfg.cars.find((c) => c.id === body.carId && c.active !== false);
-      const season = String(body.season || ''), dot = String(body.dot || ''), mileage = Number(body.mileage);
-      const error = validateRecordFields(car, season, dot, mileage);
+      const season = String(body.season || ''), mileage = Number(body.mileage), splitDot=!!body.splitDot;
+      const dotFront=splitDot?String(body.dotFront||''):'',dotRear=splitDot?String(body.dotRear||''):'';
+      const dot=splitDot?dotFront:String(body.dot||'');
+      const error = validateRecordFields(car, season, dot, mileage, splitDot, dotFront, dotRear);
       if (error) return json(res, 400, { error });
-      const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, mileage, userId: currentUser.id };
+      const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage, userId: currentUser.id };
       await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
       touchCar(car, currentUser, new Date(r.ts).toISOString());
       await writeConfig(cfg);
       const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
-      await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${dot} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
+      await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${recordDotSummary(r)} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
       if(completedTask) await appendAudit(currentUser,'tiretask_auto_complete',`TIRETASK ${car.plate} automaticky označen jako hotový`,{taskId:completedTask.id,recordId:r.id});
       return json(res, 200, { ok: true, tireTaskCompleted:completedTask ? { id:completedTask.id } : null });
     }
@@ -1133,17 +1147,21 @@ export default async function handler(req, res) {
       const r = recs.find((x) => x.path === body.path || x.id === body.recordId);
       if (!r) return json(res, 404, { error: 'RECORD' });
       const car = cfg.cars.find((c) => c.id === (body.carId || r.carId));
-      const season = String(body.season || r.season), dot = String(body.dot || r.dot), mileage = Number(body.mileage);
-      const error = validateRecordFields(car, season, dot, mileage);
+      const season = String(body.season || r.season), mileage = Number(body.mileage);
+      const splitDot=body.splitDot===undefined?!!(r.dotFront&&r.dotRear):!!body.splitDot;
+      const dotFront=splitDot?String(body.dotFront!==undefined?body.dotFront:(r.dotFront||r.dot||'')):'';
+      const dotRear=splitDot?String(body.dotRear!==undefined?body.dotRear:(r.dotRear||r.dot||'')):'';
+      const dot=splitDot?dotFront:String(body.dot||r.dot);
+      const error = validateRecordFields(car, season, dot, mileage, splitDot, dotFront, dotRear);
       if (error) return json(res, 400, { error });
       const before = { ...r };
-      const after = { ...r, carId: car.id, season, dot, mileage };
+      const after = { ...r, carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage };
       const newPath = recordPath(after);
       await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
       if (newPath !== r.path) await del(r.path);
       touchCar(car, currentUser);
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
+      await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${recordDotSummary(before)} → ${recordDotSummary(after)}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
     }
 
