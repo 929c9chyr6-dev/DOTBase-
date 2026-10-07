@@ -1076,9 +1076,14 @@ export default async function handler(req, res) {
       const resetBefore={...pinReset};
       currentUser.pinHash=newHash;
       currentUser.pinChangeRequired=null;
+      currentUser.failedPinAttempts=0;
+      currentUser.lastFailedPinAt=null;
+      currentUser.loginLockedAt=null;
+      currentUser.pinChangedAt=new Date().toISOString();
       await writeConfig(cfg);
       await appendAudit(currentUser,'user_pin_self_change','Uživatel si změnil PIN po výzvě administrátora',{userId:currentUser.id,resetRequest:resetBefore});
-      return json(res,200,{ok:true});
+      const token=sign({uid:currentUser.id,role:currentUser.role,exp:Date.now()+12*60*60*1000});
+      return json(res,200,{ok:true,token,user:{id:currentUser.id,name:currentUser.name,role:currentUser.role}});
     }
 
     const sys = systemState(cfg);

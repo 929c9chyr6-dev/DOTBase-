@@ -34,7 +34,14 @@ themeMedia.addEventListener?.('change',()=>{if(themePreference()==='system')appl
 async function api(action,p={}){
   const r=await fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',...(tok?{Authorization:'Bearer '+tok}:{})},body:JSON.stringify({action,...p})});
   const j=await r.json().catch(()=>({error:'SERVER'}));
-  if(!r.ok){const x=new Error(j.error);x.code=j.error;x.data=j;if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp(j.message||'🔧 Probíhá technická údržba\nAplikace je dočasně pozastavena administrátorem.\nZkuste to prosím později.','msg warn'),0);if(j.error==='MODULE_OFFLINE'&&tok)setTimeout(()=>showModuleBlocked(j.module,j.message),0);throw x}return j;
+  if(!r.ok){
+    const x=new Error(j.error);x.code=j.error;x.data=j;
+    if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp(j.message||'🔧 Probíhá technická údržba\nAplikace je dočasně pozastavena administrátorem.\nZkuste to prosím později.','msg warn'),0);
+    if(j.error==='MODULE_OFFLINE'&&tok)setTimeout(()=>showModuleBlocked(j.module,j.message),0);
+    if(j.error==='PIN_CHANGE_REQUIRED'&&tok&&action!=='changeOwnPin')setTimeout(()=>showPinChangeScreen({required:true,requireOldPin:j.requireOldPin!==false}),0);
+    throw x
+  }
+  return j;
 }
 function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
@@ -81,8 +88,11 @@ async function login(){
   }
 }
 function showPinChangeScreen(reset){
-  pinChangeState=reset||{required:true,requireOldPin:true};
-  $('main').hidden=true;$('login').hidden=true;$('pinChangeScreen').hidden=false;$('pinChangeMsg').innerHTML='';
+  const next=reset||{required:true,requireOldPin:true},wasVisible=!$('pinChangeScreen').hidden;
+  pinChangeState=next;
+  $('main').hidden=true;$('login').hidden=true;$('pinChangeScreen').hidden=false;
+  if(wasVisible)return;
+  $('pinChangeMsg').innerHTML='';
   $('pinChangeOldWrap').hidden=!pinChangeState.requireOldPin;
   $('pinChangeOld').value=$('pinChangeNew').value=$('pinChangeConfirm').value='';
   $('pinChangeRequirement').textContent=pinChangeState.requireOldPin?'Zadej svůj stávající PIN a potom dvakrát nový PIN.':'Admin nevyžaduje opětovné zadání stávajícího PINu. Zadej dvakrát nový PIN.';
@@ -96,9 +106,15 @@ async function submitOwnPinChange(){
   if(newPin!==confirmPin)return note($('pinChangeMsg'),'Nové PINy se neshodují.','msg err');
   $('pinChangeSubmit').disabled=true;
   try{
-    await api('changeOwnPin',{oldPin,newPin,confirmPin});
+    const r=await api('changeOwnPin',{oldPin,newPin,confirmPin});
+    if(r.token)tok=r.token;
+    if(r.user)me=r.user;
     pinChangeState=null;$('pinChangeScreen').hidden=true;$('main').hidden=false;
-    await refresh();await heartbeat();await updatePushStatus();openModule('home');
+    await refresh();
+    await heartbeat();
+    await updatePushStatus();
+    openModule('home');
+    $('pin').value='';
   }catch(x){note($('pinChangeMsg'),errorText(x),'msg err')}
   finally{$('pinChangeSubmit').disabled=false}
 }
@@ -107,7 +123,15 @@ $('pinChangeLogout').onclick=()=>lockApp();
 $('pinChangeConfirm').onkeydown=x=>{if(x.key==='Enter')submitOwnPinChange()};
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
 $('lock').onclick=()=>lockApp();
-async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn')}}
+async function refresh(){
+  try{D=await api('state');if(D.me)me=D.me;render()}
+  catch(x){
+    if(x.code==='AUTH')lockApp();
+    else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn');
+    else if(x.code==='PIN_CHANGE_REQUIRED')showPinChangeScreen({required:true,requireOldPin:x.data?.requireOldPin!==false});
+    else throw x;
+  }
+}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
 function dotLabel(r){return r?.dotFront&&r?.dotRear?'PŘ '+r.dotFront+' / Z '+r.dotRear:(r?.dot||'—')}
