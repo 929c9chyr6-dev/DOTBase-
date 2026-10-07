@@ -98,7 +98,7 @@ function actionModule(action){
   return null;
 }
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician', 'test'];
-const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsReceive','notificationsSendOperational'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','tireTaskCompletedView','notificationsReceive','notificationsSendOperational'];
 const BASE_PERMISSIONS = {
   dotView: true,
   dotCreate: true,
@@ -115,6 +115,7 @@ const BASE_PERMISSIONS = {
   attentionEdit: false,
   tireTaskCreate: false,
   tireTaskEdit: false,
+  tireTaskCompletedView: false,
   notificationsReceive: true,
   notificationsSendOperational: false,
 };
@@ -128,6 +129,7 @@ function effectivePermissions(user) {
   const out = user?.role === 'test'
     ? Object.fromEntries(PERMISSION_KEYS.map((k)=>[k,false]))
     : { ...BASE_PERMISSIONS };
+  if(user?.role==='dispatch')out.tireTaskCompletedView=true;
   for (const k of PERMISSION_KEYS) if (typeof user?.permissions?.[k] === 'boolean') out[k] = user.permissions[k];
   return out;
 }
@@ -228,7 +230,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 21;
+  cfg.version = 22;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -991,8 +993,9 @@ export default async function handler(req, res) {
       return json(res,200,{records:compact,recordTotal:recs.length,seasonRecords:buildSeasonRecordEvidence(recs),attentionIssues:issues.slice(0,100),attentionIssueCount:issues.length,pneuTasks,recordUsers:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
     }
     if(body.action==='taskData'){
-      const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser);
-      return json(res,200,{tireTasks:publicTireTasks(cfg,rows,recs),tireTaskCapabilities:caps,tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
+      const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView');
+      const publicRows=publicTireTasks(cfg,rows,recs),visibleRows=canCompletedView?publicRows:publicRows.filter((t)=>t.status!=='closed');
+      return json(res,200,{tireTasks:visibleRows,tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[],tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
     }
     if(body.action==='notificationData'){
       return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
@@ -1110,7 +1113,7 @@ export default async function handler(req, res) {
         updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
         comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:'Položka vytvořena v denním plánu '+(index+1)+'/'+normalized.length}],
         completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
+        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,startedBy:null,startedById:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
       }));
       const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
@@ -1143,7 +1146,7 @@ export default async function handler(req, res) {
         updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
         comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:assignee?'Úkol vytvořen a přiřazen: '+assignee.name:'Úkol vytvořen'}],
         completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
+        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,startedBy:null,startedById:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
       };
       const rows=await getTireTasks();rows.push(task);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_create',`Vytvořen TASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
@@ -1224,7 +1227,7 @@ export default async function handler(req, res) {
       if(status==='in_progress'&&task.assignedToUserId&&(!task.acceptedAt||task.acceptedById!==task.assignedToUserId))return json(res,409,{error:'TIRETASK_NOT_ACCEPTED',message:'Přiřazený uživatel musí TASK nejdřív přijmout.'});
       const now=new Date().toISOString(),before=task.status;task.status=status;
       task.problemNote=status==='problem'?cleanText(body.problemNote,500):'';
-      if(status==='in_progress'&&!task.startedAt)task.startedAt=now;
+      if(status==='in_progress'&&!task.startedAt){task.startedAt=now;task.startedBy=currentUser.name;task.startedById=currentUser.id}
       if(status==='problem')task.problemAt=now;
       if(status==='planned')task.problemAt=null;
       task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
