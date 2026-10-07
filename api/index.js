@@ -291,6 +291,15 @@ async function writeJson(path, value) {
     access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'application/json'
   });
 }
+async function getSyncVersion(){
+  const row=await readJson('sync-version.json',null);
+  return row?.version||'0';
+}
+async function touchSyncVersion(){
+  const version=Date.now().toString(36)+'-'+uid();
+  await writeJson('sync-version.json',{version,updatedAt:new Date().toISOString()});
+  return version;
+}
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
@@ -338,7 +347,7 @@ function normalizeConfig(cfg) {
   }
   return cfg;
 }
-async function writeConfig(cfg) { await writeJson('config.json', normalizeConfig(cfg)); }
+async function writeConfig(cfg) { await writeJson('config.json', normalizeConfig(cfg)); await touchSyncVersion(); }
 async function readConfig() {
   let cfg = await readJson('config.json', null);
   if (cfg) return normalizeConfig(cfg);
@@ -355,24 +364,36 @@ async function readConfig() {
   await writeConfig(cfg);
   return cfg;
 }
-async function getRecords() {
-  let blobs = [], cursor;
-  do {
-    const r = await list({ prefix: 'records/', limit: 1000, cursor });
-    blobs.push(...r.blobs);
-    cursor = r.hasMore ? r.cursor : undefined;
-  } while (cursor && blobs.length < 10000);
-  return blobs.map((b) => {
-    const file = b.pathname.split('/').pop().replace(/\.rec$/, '');
-    const p = file.split('_');
-    if (p.length < 7) return null;
-    const [ts, id, carId, season, dot, mileage, userId, dotFrontRaw, dotRearRaw] = p;
-    const n = Number(ts);
-    if (!Number.isFinite(n)) return null;
-    const dotFront=/^\d{4}$/.test(dotFrontRaw||'')?dotFrontRaw:'',dotRear=/^\d{4}$/.test(dotRearRaw||'')?dotRearRaw:'';
-    const splitDot=!!(dotFront&&dotRear);
-    return { path: b.pathname, ts: n, id, carId, season, dot, dotFront:splitDot?dotFront:'', dotRear:splitDot?dotRear:'', splitDot, mileage: Number(mileage), userId, createdAt: new Date(n).toISOString() };
-  }).filter(Boolean).sort((a, b) => b.ts - a.ts);
+function recordFromPath(pathname){
+  const file=String(pathname||'').split('/').pop().replace(/\.rec$/,'');
+  const p=file.split('_');
+  if(p.length<7)return null;
+  const [ts,id,carId,season,dot,mileage,userId,dotFrontRaw,dotRearRaw]=p,n=Number(ts);
+  if(!Number.isFinite(n))return null;
+  const dotFront=/^\d{4}$/.test(dotFrontRaw||'')?dotFrontRaw:'',dotRear=/^\d{4}$/.test(dotRearRaw||'')?dotRearRaw:'';
+  const splitDot=!!(dotFront&&dotRear);
+  return {path:pathname,ts:n,id,carId,season,dot,dotFront:splitDot?dotFront:'',dotRear:splitDot?dotRear:'',splitDot,mileage:Number(mileage),userId,createdAt:new Date(n).toISOString()};
+}
+function recordIndexRow(r,path){
+  return {...r,path:path||r.path||recordPath(r),createdAt:r.createdAt||new Date(r.ts).toISOString()};
+}
+async function rebuildRecordIndex(){
+  let blobs=[],cursor;
+  do{
+    const r=await list({prefix:'records/',limit:1000,cursor});
+    blobs.push(...r.blobs);cursor=r.hasMore?r.cursor:undefined;
+  }while(cursor&&blobs.length<10000);
+  const rows=blobs.map((b)=>recordFromPath(b.pathname)).filter(Boolean).sort((a,b)=>b.ts-a.ts);
+  await writeJson('records-index.json',rows);
+  return rows;
+}
+async function writeRecordIndex(rows){
+  await writeJson('records-index.json',(Array.isArray(rows)?rows:[]).filter(Boolean).sort((a,b)=>b.ts-a.ts).slice(0,10000));
+}
+async function getRecords(){
+  const indexed=await readJson('records-index.json',null);
+  if(Array.isArray(indexed))return indexed.filter(Boolean).sort((a,b)=>b.ts-a.ts);
+  return rebuildRecordIndex();
 }
 async function getAudit() { return await readJson('audit.json', []); }
 async function appendAudit(actor, action, summary, details = null) {
@@ -395,7 +416,7 @@ function presenceFor(userId, presence, now = Date.now()) {
   return { status, lastOnlineAt: p.lastHeartbeatAt || null, lastActivityAt: p.lastActivityAt || null };
 }
 async function getNotificationLog() { return await readJson('notifications.json', []); }
-async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
+async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); await touchSyncVersion(); }
 function normalizeNotificationRecord(n) {
   const type=String(n?.type||'');
   const legacyPassive=!n?.channel&&typeof n?.requiresAck!=='boolean'&&type!=='manual';
@@ -476,6 +497,7 @@ async function getTireTasks() {
 }
 async function writeTireTasks(rows) {
   await writeJson('tiretasks.json',(Array.isArray(rows)?rows:[]).slice(0,3000));
+  await touchSyncVersion();
 }
 function publicTireTasks(cfg, rows) {
   const carById=Object.fromEntries(cfg.cars.map((car)=>[car.id,car]));
@@ -686,6 +708,7 @@ function userStats(cfg, recs, pushes, presence) {
 }
 async function publicState(cfg, recs, currentUser) {
   const perms = effectivePermissions(currentUser);
+  const syncVersion=await getSyncVersion();
   const allRecords = enrichRecords(cfg, recs);
   const records = currentUser.role === 'admin' ? allRecords : compactRecordsForPermissions(allRecords, perms);
   const [notifications, tireTaskRows] = await Promise.all([getNotificationLog(), getTireTasks()]);
@@ -714,6 +737,7 @@ async function publicState(cfg, recs, currentUser) {
     .map(publicNotification);
   const notificationInbox=notificationRows.slice(0,150).map(publicNotification);
   const base = {
+    syncVersion,
     me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
     permissions: perms,
     vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
@@ -739,18 +763,21 @@ async function publicState(cfg, recs, currentUser) {
     modules: publicModules(cfg, currentUser),
     push: { publicKey: hasPermission(currentUser,'notificationsReceive') ? VAPID_PUBLIC_KEY : '' },
   };
-  if (currentUser.role !== 'admin') return base;
-  const [audit, pushes, presence] = await Promise.all([getAudit(), getPushStore(), getPresence()]);
+  return base;
+}
+async function publicAdminState(cfg,recs){
+  const [audit,pushes,presence,notifications]=await Promise.all([getAudit(),getPushStore(),getPresence(),getNotificationLog()]);
+  const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c]));
   return {
-    ...base,
-    users: userStats(cfg, recs, pushes, presence),
-    allCars: cfg.cars,
-    dashboard: dashboard(cfg, recs),
-    audit: audit.slice(0, 200),
-    notificationLog: notifications.slice(0, 150).map((raw) => {const n=normalizeNotificationRecord(raw);return { ...n, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '' };}),
-    notificationSettings: cfg.notificationSettings,
-    transportAdmin: { ...cfg.transport, sourceConfigured: !!GOLEMIO_API_KEY, sourceName: 'NDIC přes Golemio' },
-    modulesAdmin: normalizeModules(cfg.modules),
+    adminLoaded:true,
+    users:userStats(cfg,recs,pushes,presence),
+    allCars:cfg.cars,
+    dashboard:dashboard(cfg,recs),
+    audit:audit.slice(0,200),
+    notificationLog:notifications.slice(0,150).map((raw)=>{const n=normalizeNotificationRecord(raw);return {...n,carPlate:n.carId?(carById[n.carId]?.plate||''):''}}),
+    notificationSettings:cfg.notificationSettings,
+    transportAdmin:{...cfg.transport,sourceConfigured:!!GOLEMIO_API_KEY,sourceName:'NDIC přes Golemio'},
+    modulesAdmin:normalizeModules(cfg.modules),
   };
 }
 function validDotValue(dot){
@@ -1108,7 +1135,7 @@ export default async function handler(req, res) {
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
       return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
     }
-    const readOnlyAllowed = new Set(['state', 'heartbeat', 'myPushDevices', 'vehicleDetail', 'notificationRespond', 'notificationSeen', 'saveNotificationPrefs', 'trafficReport']);
+    const readOnlyAllowed = new Set(['state','sync','adminState','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs','trafficReport']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
@@ -1120,20 +1147,29 @@ export default async function handler(req, res) {
       if(currentUser.role!=='admin'&&!userCanSeeModule(cfg,requestedModule,currentUser))return json(res,403,{error:'MODULE_HIDDEN',module:requestedModule,moduleLabel:MODULE_LABELS[requestedModule],message:'Tento modul pro tebe není povolený.'});
     }
 
-    if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), currentUser));
+    if (body.action === 'state') return json(res,200,await publicState(cfg,await getRecords(),currentUser));
+    if (body.action === 'sync') {
+      const version=await getSyncVersion(),since=String(body.since||'');
+      return json(res,200,{version,changed:!since||since!==version});
+    }
+    if (body.action === 'adminState') {
+      if(currentUser.role!=='admin')return json(res,403,{error:'ADMIN'});
+      return json(res,200,await publicAdminState(cfg,await getRecords()));
+    }
 
     if (body.action === 'heartbeat') {
       const presence = await getPresence();
       const now = new Date().toISOString();
-      const previous = presence[currentUser.id] || {};
-      presence[currentUser.id] = {
-        lastHeartbeatAt: now,
-        lastActivityAt: body.active ? now : (previous.lastActivityAt || currentUser.lastLoginAt || now),
-        visible: !!body.visible,
-        active: !!body.active,
+      const previous=presence[currentUser.id]||{},nowMs=Date.now(),prevMs=previous.lastHeartbeatAt?Date.parse(previous.lastHeartbeatAt):0;
+      const visible=!!body.visible,active=!!body.active;
+      if(prevMs&&nowMs-prevMs<60000&&previous.visible===visible&&previous.active===active)return json(res,200,{ok:true,unchanged:true});
+      presence[currentUser.id]={
+        lastHeartbeatAt:now,
+        lastActivityAt:active?now:(previous.lastActivityAt||currentUser.lastLoginAt||now),
+        visible,active,
       };
       await writePresence(presence);
-      return json(res, 200, { ok: true });
+      return json(res,200,{ok:true});
     }
 
     if (body.action === 'addRecord') {
@@ -1145,8 +1181,10 @@ export default async function handler(req, res) {
       const error = validateRecordFields(car, season, dot, mileage, splitDot, dotFront, dotRear);
       if (error) return json(res, 400, { error });
       const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage, userId: currentUser.id };
-      await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
-      touchCar(car, currentUser, new Date(r.ts).toISOString());
+      const newRecordPath=recordPath(r);
+      await put(newRecordPath,'1',{access:'private',addRandomSuffix:false,contentType:'text/plain'});
+      const recordIndex=await getRecords();recordIndex.unshift(recordIndexRow(r,newRecordPath));await writeRecordIndex(recordIndex);
+      touchCar(car,currentUser,new Date(r.ts).toISOString());
       await writeConfig(cfg);
       const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
       await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${recordDotSummary(r)} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
@@ -1443,9 +1481,10 @@ export default async function handler(req, res) {
       const before = { ...r };
       const after = { ...r, carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage };
       const newPath = recordPath(after);
-      await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
-      if (newPath !== r.path) await del(r.path);
-      touchCar(car, currentUser);
+      await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
+      if(newPath!==r.path)await del(r.path);
+      const recIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(recIdx>=0)recs[recIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+      touchCar(car,currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${recordDotSummary(before)} → ${recordDotSummary(after)}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
@@ -1459,8 +1498,9 @@ export default async function handler(req, res) {
       const r = recs.find((x) => x.path === path);
       if (!r) return json(res, 404, { error: 'RECORD' });
       await del(path);
-      const car = cfg.cars.find((c) => c.id === r.carId);
-      touchCar(car, currentUser);
+      await writeRecordIndex(recs.filter((x)=>x.path!==path&&x.id!==r.id));
+      const car=cfg.cars.find((c)=>c.id===r.carId);
+      touchCar(car,currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_delete', `Smazán záznam ${car?.plate || ''} DOT ${r.dot} · ${r.mileage} km`, r);
       return json(res, 200, { ok: true });
@@ -1494,13 +1534,15 @@ export default async function handler(req, res) {
         const before = { ...r };
         const after = { ...r, season, dot, mileage };
         const newPath = recordPath(after);
-        await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
-        if (newPath !== r.path) await del(r.path);
-        await appendAudit(currentUser, 'attention_issue_edit', `Opraveno upozornění ${car.plate}: ${issue.text}`, { issueKey, before, after: { ...after, path: newPath } });
+        await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
+        if(newPath!==r.path)await del(r.path);
+        const recIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(recIdx>=0)recs[recIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+        await appendAudit(currentUser,'attention_issue_edit',`Opraveno upozornění ${car.plate}: ${issue.text}`,{issueKey,before,after:{...after,path:newPath}});
       } else {
-        const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, mileage, userId: currentUser.id };
-        await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
-        await appendAudit(currentUser, 'attention_issue_edit', `Doplněno z upozornění ${car.plate}: ${issue.text}`, { issueKey, record: r });
+        const r={ts:Date.now(),id:uid(),carId:car.id,season,dot,mileage,userId:currentUser.id},newPath=recordPath(r);
+        await put(newPath,'1',{access:'private',addRandomSuffix:false,contentType:'text/plain'});
+        recs.unshift(recordIndexRow(r,newPath));await writeRecordIndex(recs);
+        await appendAudit(currentUser,'attention_issue_edit',`Doplněno z upozornění ${car.plate}: ${issue.text}`,{issueKey,record:r});
       }
       touchCar(car, currentUser);
       await writeConfig(cfg);
@@ -1799,9 +1841,10 @@ export default async function handler(req, res) {
       const before = { ...r };
       const after = { ...r, carId: car.id, season, dot, mileage };
       const newPath = recordPath(after);
-      await put(newPath, '1', { access: 'private', addRandomSuffix: false, allowOverwrite: true, contentType: 'text/plain' });
-      if (newPath !== r.path) await del(r.path);
-      touchCar(car, currentUser);
+      await put(newPath,'1',{access:'private',addRandomSuffix:false,allowOverwrite:true,contentType:'text/plain'});
+      if(newPath!==r.path)await del(r.path);
+      const adminRecIdx=recs.findIndex((x)=>x.id===r.id||x.path===r.path);if(adminRecIdx>=0)recs[adminRecIdx]=recordIndexRow(after,newPath);await writeRecordIndex(recs);
+      touchCar(car,currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_edit', `Upraven záznam ${car.plate}: DOT ${before.dot} → ${dot}, km ${before.mileage} → ${mileage}`, { before, after: { ...after, path: newPath } });
       return json(res, 200, { ok: true });
@@ -1813,7 +1856,8 @@ export default async function handler(req, res) {
       const recs = await getRecords();
       const r = recs.find((x) => x.path === path);
       await del(path);
-      const car = r ? cfg.cars.find((c) => c.id === r.carId) : null;
+      if(r)await writeRecordIndex(recs.filter((x)=>x.path!==path&&x.id!==r.id));
+      const car=r?cfg.cars.find((c)=>c.id===r.carId):null;
       touchCar(car, currentUser);
       await writeConfig(cfg);
       await appendAudit(currentUser, 'record_delete', `Smazán záznam ${car?.plate || ''} ${r ? `DOT ${r.dot} · ${r.mileage} km` : ''}`.trim(), r || { path });

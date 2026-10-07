@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -145,7 +145,11 @@ $('loginResetWithoutOld').onclick=beginResetWithoutOldPin;
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
 $('lock').onclick=()=>lockApp();
 async function refresh(){
-  try{D=await api('state');if(D.me)me=D.me;render()}
+  try{
+    const fresh=await api('state');
+    D=fresh;if(D.me)me=D.me;lastSyncVersion=D.syncVersion||lastSyncVersion;render();
+    if(currentModule==='admin'&&me?.role==='admin')await loadAdminState(true);
+  }
   catch(x){
     if(x.code==='AUTH')lockApp();
     else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn');
@@ -154,7 +158,22 @@ async function refresh(){
   }
 }
 
-function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
+async function syncCheck(force=false){
+  if(!tok||syncInFlight||(!force&&document.visibilityState!=='visible'))return;
+  syncInFlight=true;
+  try{
+    const r=await api('sync',{since:lastSyncVersion});
+    if(r.version)lastSyncVersion=r.version;
+    if(r.changed)await refresh();
+  }catch(x){if(x.code==='AUTH')lockApp()}
+  finally{syncInFlight=false}
+}
+async function loadAdminState(force=false){
+  if(me?.role!=='admin')return;
+  if(!force&&D.adminLoaded&&Date.now()-adminStateLoadedAt<30000){renderAdmin();return}
+  const r=await api('adminState');Object.assign(D,r);D.adminLoaded=true;adminStateLoadedAt=Date.now();renderAdmin();
+}
+function latest(id,s){return (D.records||[]).find(r=>r.carId===id&&(!s||r.season===s))}
 function dotLabel(r){return r?.dotFront&&r?.dotRear?'PŘ '+r.dotFront+' / Z '+r.dotRear:(r?.dot||'—')}
 function validDot(v){return /^\d{4}$/.test(v)&&+v.slice(0,2)>=1&&+v.slice(0,2)<=53}
 function prefillMileage(id){
@@ -607,7 +626,7 @@ function openModule(id){
     const active=document.querySelector('#pneu .panel.active')?.id;
     if(!active||!allowedTab(active)){const first=['entry','season','fleet','history'].find(allowedTab);if(first)showTab(first,false)}
   }
-  if(currentModule==='admin'&&me?.role==='admin')refresh();
+  if(currentModule==='admin'&&me?.role==='admin')loadAdminState(false).catch(x=>alert(errorText(x)));
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
   if(currentModule==='tiretask')renderTireTask();
   if(currentModule==='notifications')renderNotifications();
@@ -1358,7 +1377,7 @@ function applyAccess(){
   if(MODULE_KEYS.includes(currentModule)&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
   else if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).visible===false)openModule('home');
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin'&&D.adminLoaded)renderAdmin();else if(me.role!=='admin')renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='season')renderSeasonDashboard();if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
@@ -1499,14 +1518,15 @@ async function heartbeat(){
   const visible=document.visibilityState==='visible',active=visible&&Date.now()-lastInteraction<120000;
   try{await api('heartbeat',{visible,active})}catch{}
 }
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')markActivity();heartbeat()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){markActivity();syncCheck(true)}heartbeat()});
 window.addEventListener('pagehide',()=>{if(!tok)return;fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({action:'heartbeat',visible:false,active:false}),keepalive:true}).catch(()=>{})});
 setInterval(()=>{
   if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false||moduleCfg('transport').online===false)return;
   const mins=Math.max(3,Number(D.transport?.pollMinutes||5));
   if(Date.now()-lastTrafficLoad>=mins*60000)loadTrafficReport(false).catch(()=>{});
 },60000);
-setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))refresh()},12000);
-setInterval(heartbeat,45000);
+setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))syncCheck()},30000);
+setInterval(()=>{if(tok&&currentModule==='admin'&&me?.role==='admin')loadAdminState(true).catch(()=>{})},60000);
+setInterval(heartbeat,90000);
 applyTheme();loadLoginUsers();if('serviceWorker'in navigator)ensureSW().catch(()=>{});
 })();
