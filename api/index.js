@@ -376,12 +376,12 @@ function recordFromPath(pathname){
 }
 async function markRecordIndexDirty(){
   const generation=Date.now().toString(36)+'-'+uid('ri');
-  await writeJson('records-index-meta.json',{generation,dirty:true,updatedAt:new Date().toISOString()});
+  await writeJson('records-index-meta.json',{generation,updatedAt:new Date().toISOString()});
 }
 async function rebuildRecordIndex(maxAttempts=3){
   let lastRows=[];
   for(let attempt=0;attempt<maxAttempts;attempt++){
-    const before=await readJson('records-index-meta.json',{generation:'0',dirty:true});
+    const before=await readJson('records-index-meta.json',{generation:'0'});
     let blobs=[],cursor;
     do{
       const r=await list({prefix:'records/',limit:1000,cursor});
@@ -389,20 +389,16 @@ async function rebuildRecordIndex(maxAttempts=3){
     }while(cursor&&blobs.length<10000);
     const rows=blobs.map((b)=>recordFromPath(b.pathname)).filter(Boolean).sort((a,b)=>b.ts-a.ts);
     lastRows=rows;
-    const after=await readJson('records-index-meta.json',{generation:'0',dirty:true});
+    const after=await readJson('records-index-meta.json',{generation:'0'});
     if(before.generation!==after.generation&&attempt<maxAttempts-1)continue;
-    await writeJson('records-index.json',rows);
-    const verify=await readJson('records-index-meta.json',{generation:'0',dirty:true});
-    if(verify.generation===after.generation){
-      await writeJson('records-index-meta.json',{generation:after.generation,dirty:false,updatedAt:new Date().toISOString()});
-      return rows;
-    }
+    await writeJson('records-index.json',{generation:after.generation,rows});
+    return rows;
   }
   return lastRows;
 }
 async function getRecords(){
-  const [indexed,meta]=await Promise.all([readJson('records-index.json',null),readJson('records-index-meta.json',null)]);
-  if(Array.isArray(indexed)&&meta?.dirty===false)return indexed;
+  const [indexed,meta]=await Promise.all([readJson('records-index.json',null),readJson('records-index-meta.json',{generation:'0'})]);
+  if(indexed&&Array.isArray(indexed.rows)&&indexed.generation===meta.generation)return indexed.rows;
   return rebuildRecordIndex();
 }
 async function getAudit() { return await readJson('audit.json', []); }
