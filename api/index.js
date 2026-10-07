@@ -920,6 +920,7 @@ export default async function handler(req, res) {
       const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
       if(!task)return json(res,404,{error:'TIRETASK'});
       if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
+      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový úkol už nelze měnit; nejdřív je potřeba opravit navázaný PNEU/DOT záznam.'});
       const before={date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,instructions:task.instructions};
       if(body.date!==undefined){const v=normalizeTaskDate(body.date);if(!v)return json(res,400,{error:'TIRETASK_DATE'});task.date=v}
       if(body.time!==undefined){const v=normalizeTaskTime(body.time);if(!v)return json(res,400,{error:'TIRETASK_TIME'});task.time=v}
@@ -955,6 +956,7 @@ export default async function handler(req, res) {
       const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
       if(!task)return json(res,404,{error:'TIRETASK'});
       if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
+      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'});
       const status=String(body.status||'');
       if(!['planned','in_progress','problem'].includes(status))return json(res,400,{error:'TIRETASK_STATUS'});
       const now=new Date().toISOString(),before=task.status;task.status=status;
