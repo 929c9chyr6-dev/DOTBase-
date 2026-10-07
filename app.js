@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='';
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='';
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -7,7 +7,6 @@ const MODULE_META={
   service:{label:'SERVIS',icon:'🔧'},
   pneu:{label:'PNEU / DOT',icon:'🛞'},
   tiretask:{label:'TASK',icon:'📋'},
-  transport:{label:'DOPRAVA',icon:'🚦'},
   maintenance:{label:'ÚDRŽBA',icon:'🧽'},
   notifications:{label:'OZNÁMENÍ',icon:'🔔'},
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
@@ -47,12 +46,12 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',MODULE_OFFLINE:'Modul je dočasně offline.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
   if(lastUserId)localStorage.setItem('lastLoginUserId',lastUserId);
-  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;lastSyncVersion='';syncInFlight=false;adminStateLoadedAt=0;dataLoadedAt={};historyNextOffset=null;historyTotal=0;historyLoading=false;fleetDataKey='';if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
+  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;lastSyncVersion='';syncInFlight=false;adminStateLoadedAt=0;dataLoadedAt={};historyNextOffset=null;historyTotal=0;historyLoading=false;fleetDataKey='';if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
   if(message)note($('loginMsg'),message,cls);loadLoginUsers().finally(()=>$('pin').focus());
 }
@@ -90,12 +89,12 @@ async function login(){
     const r=await api('login',{userId,pin:p});tok=r.token;me=r.user;localStorage.setItem('lastLoginUserId',userId);lastInteraction=Date.now();$('login').hidden=true;$('pin').value='';
     if(r.pinChangeRequired?.required){showPinChangeScreen(r.pinChangeRequired);return}
     $('main').hidden=false;
-    await refresh();await heartbeat();await updatePushStatus();loadTrafficReport(false).catch(()=>{});
+    await refresh();await heartbeat();await updatePushStatus();
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
     if(tab==='admin')openModule('admin');
     else if(['entry','season','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
-    else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
+    else if(['vehicleOverview','service','pneu','tiretask','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
     const remaining=x.data?.attemptsRemaining;
@@ -704,7 +703,6 @@ function openModule(id){
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
   if(currentModule==='tiretask')loadTaskData(false).catch(()=>{});
   if(currentModule==='notifications')loadNotificationData(false).catch(()=>{});
-  if(currentModule==='transport'){renderTrafficReport();loadTrafficReport(false).catch(()=>{})}
   if(currentModule==='settings'){updatePushStatus();loadMyPushDevices();renderNotificationSettings()}
 }
 
@@ -756,127 +754,6 @@ function openGlobalSearchResult(type,id){
   }
   if(type==='notification'){notificationView='all';openModule('notifications');loadNotificationData(false).then(()=>focusUi('.notification-card[data-notification-id="'+CSS.escape(id)+'"]'))}
 }
-function trafficStatusMeta(status){
-  return status==='critical'?{cls:'critical',icon:'🔴',label:'Vážné omezení'}:
-    status==='warning'?{cls:'warning',icon:'🟠',label:'Omezení / komplikace'}:
-    status==='clear'?{cls:'clear',icon:'🟢',label:'Bez hlášených omezení'}:
-    {cls:'unknown',icon:'⚪',label:'Čeká na data'};
-}
-function trafficDaypart(){
-  const h=new Date().getHours();
-  if(h>=5&&h<10)return '🌅 RANNÍ ŠPIČKA';
-  if(h>=14&&h<19)return '🌆 ODPOLEDNÍ ŠPIČKA';
-  return 'DOPRAVNÍ REPORT';
-}
-function trafficHomeText(){
-  if(!trafficReport)return 'Dopravní report pro sledované úseky.';
-  if(!trafficReport.sourceConfigured)return '⚪ Datový zdroj čeká na připojení';
-  if(trafficReport.error==='SOURCE_FORBIDDEN')return '⚪ Dopravní zdroj vyžaduje další oprávnění';
-  if(trafficReport.error)return '⚪ Dopravní data nejsou dostupná';
-  if(trafficReport.summary?.critical)return '🔴 '+trafficReport.summary.critical+' úseků s vážným omezením';
-  if(trafficReport.summary?.warning)return '🟠 '+trafficReport.summary.warning+' úseků s omezením';
-  return '🟢 Bez hlášených omezení';
-}
-function renderTrafficMap(report){
-  if(!$('trafficMap'))return;
-  const status=Object.fromEntries((report?.corridors||[]).map(x=>[x.id,x.status]));
-  const cls=id=>e(status[id]||'unknown');
-  $('trafficMap').innerHTML='<svg viewBox="0 0 520 300" role="img" aria-label="Orientační mapa sledovaných dopravních koridorů">'+
-    '<g opacity=".18"><path d="M0 75H520M0 150H520M0 225H520M130 0V300M260 0V300M390 0V300" stroke="currentColor" stroke-width="1"/></g>'+
-    '<path class="traffic-map-road '+cls('d6-west')+'" d="M42 90 L85 92 L120 95 L160 101 L202 108"/>'+
-    '<path class="traffic-map-road '+cls('d0-west')+'" d="M120 38 L148 63 L176 95 L205 128 L235 162 L274 197 L316 238"/>'+
-    '<path class="traffic-map-road '+cls('evropska')+'" d="M176 95 L221 84 L273 80 L334 86 L388 96"/>'+
-    '<path class="traffic-map-road '+cls('rozvadovska')+'" d="M205 128 L250 138 L293 146"/>'+
-    '<path class="traffic-map-road '+cls('plzenska')+'" d="M293 146 L345 160 L405 172 L468 176"/>'+
-    '<path class="traffic-map-road '+cls('lochkov-tunnels')+'" d="M285 210 L316 238 L345 253"/>'+
-    '<circle class="traffic-map-road '+cls('jenec')+'" cx="120" cy="95" r="22"/>'+
-    '<circle cx="120" cy="95" r="4" fill="currentColor"/><text class="traffic-map-label" x="84" y="128">Jeneč</text>'+
-    '<text class="traffic-map-label" x="42" y="78">D6</text><text class="traffic-map-label" x="113" y="27">Středokluky</text>'+
-    '<text class="traffic-map-label" x="322" y="251">Lochkov</text><text class="traffic-map-label" x="397" y="166">Plzeňská</text>'+
-    '<text class="traffic-map-label" x="335" y="76">Evropská</text><text class="traffic-map-label" x="225" y="127">Rozvadovská spojka</text>'+
-    '</svg>';
-}
-function renderTrafficReport(){
-  if(!$('trafficHeadline'))return;
-  $('trafficDaypart').textContent=trafficDaypart();
-  const r=trafficReport;
-  if(!r){
-    $('trafficHeadline').textContent=trafficLoading?'Načítám dopravní situaci…':'Dopravní report je připravený.';
-    $('trafficUpdated').textContent='Otevři modul nebo použij Obnovit.';
-    $('trafficSummary').innerHTML='';
-    $('trafficCorridors').innerHTML='<div class="small">Načítám sledované úseky…</div>';
-    $('trafficEvents').innerHTML='<div class="small">Načítám aktuální události…</div>';
-    renderTrafficMap({corridors:(D.transport?.corridors||[]).map(x=>({...x,status:'unknown'}))});
-    return;
-  }
-  const s=r.summary||{};
-  if(!r.sourceConfigured)$('trafficHeadline').textContent='Sledované koridory jsou připravené';
-  else if(s.critical)$('trafficHeadline').textContent='Pozor, na trase jsou vážná omezení';
-  else if(s.warning)$('trafficHeadline').textContent='Na některých úsecích jsou omezení';
-  else $('trafficHeadline').textContent='Bez hlášených omezení';
-  $('trafficUpdated').textContent=r.fetchedAt?'Data '+(r.stale?'z posledního dostupného načtení · ':'aktualizována ') + dt(r.fetchedAt):'Živý zdroj zatím není připojený.';
-  $('trafficSummary').innerHTML=
-    '<div class="traffic-stat"><b>🟢 '+(s.clear||0)+'</b><span>bez omezení</span></div>'+
-    '<div class="traffic-stat"><b>🟠 '+(s.warning||0)+'</b><span>omezení</span></div>'+
-    '<div class="traffic-stat"><b>🔴 '+(s.critical||0)+'</b><span>vážné</span></div>';
-  const src=$('trafficSourceCard');
-  src.classList.toggle('traffic-source-ok',!!r.sourceConfigured&&!r.error);
-  src.classList.toggle('traffic-source-warn',!r.sourceConfigured||!!r.error);
-  $('trafficSourceTitle').textContent=r.sourceConfigured?'📡 '+(r.source||'NDIC přes Golemio'):'📡 Dopravní data čekají na připojení';
-  $('trafficSourceText').textContent=!r.sourceConfigured
-    ?'Report a sledované úseky jsou připravené. Pro živá data chybí na serveru Golemio API klíč.'
-    :r.error==='SOURCE_FORBIDDEN'
-      ?'Golemio API klíč je připojený a platný, ale tento účet nemá oprávnění k dopravnímu zdroji Traffic Restrictions / FCD.'
-      :r.error==='SOURCE_UNAUTHORIZED'
-        ?'Golemio API klíč nebyl dopravním zdrojem přijat.'
-        :r.error
-          ?(r.stale?'Zdroj je dočasně nedostupný; zobrazuji poslední uložená data.':'Zdroj je dočasně nedostupný.')
-          :'Aktuální dopravní omezení z NDIC přes server Golemio.';
-  $('trafficCorridors').innerHTML=(r.corridors||[]).map(x=>{
-    const m=trafficStatusMeta(x.status);
-    return '<div class="traffic-corridor traffic-'+m.cls+'"><div class="traffic-corridor-top"><span class="traffic-state-dot"></span><div style="flex:1"><b>'+e(x.name)+'</b><div class="traffic-status-label">'+m.icon+' '+m.label+(x.eventCount?' · '+x.eventCount+' událostí':'')+'</div><div class="small" style="margin-top:4px">'+e(x.summary||x.description||'')+'</div></div></div></div>';
-  }).join('')||'<div class="small">Nejsou nastavené žádné sledované úseky.</div>';
-  $('trafficEvents').innerHTML=(r.events||[]).map(ev=>{
-    const names=(ev.corridorIds||[]).map(id=>r.corridors.find(c=>c.id===id)?.name).filter(Boolean);
-    const extra=[ev.delayMinutes?('zdržení cca '+ev.delayMinutes+' min'):'',ev.lanesRestricted?('omezené pruhy: '+ev.lanesRestricted):''].filter(Boolean).join(' · ');
-    return '<div class="traffic-event '+(ev.severity==='critical'?'critical':'')+'"><div class="traffic-event-title">'+(ev.severity==='critical'?'🔴':'🟠')+' '+e(ev.typeLabel||'Dopravní omezení')+'</div><div>'+e(ev.text||'')+'</div>'+(extra?'<div class="small" style="margin-top:4px">'+e(extra)+'</div>':'')+(names.length?'<div class="small" style="margin-top:4px">Úsek: '+e(names.join(' · '))+'</div>':'')+'</div>';
-  }).join('')||(r.error==='SOURCE_FORBIDDEN'?'<div class="small">Živá dopravní data zatím nejsou dostupná, protože API účet nemá oprávnění k tomuto zdroji.</div>':r.error?'<div class="small">Dopravní data se momentálně nepodařilo načíst.</div>':r.sourceConfigured?'<div class="small">Na sledovaných úsecích nejsou aktuálně zachycená žádná hlášená omezení.</div>':'<div class="small">Události se zobrazí po připojení živého datového zdroje.</div>');
-  renderTrafficMap(r);
-}
-async function loadTrafficReport(force=false){
-  if(!tok||trafficLoading||D.transport?.enabled===false||moduleCfg('transport').online===false)return trafficReport;
-  trafficLoading=true;renderTrafficReport();
-  try{
-    trafficReport=await api('trafficReport',{force:!!force});lastTrafficLoad=Date.now();
-    renderTrafficReport();renderModuleShell();
-    return trafficReport;
-  }catch(x){
-    if($('trafficSourceText'))$('trafficSourceText').textContent='Dopravní report se nepodařilo načíst.';
-    throw x;
-  }finally{trafficLoading=false}
-}
-function updateTrafficRepeatVisibility(){
-  if($('trafficRepeatMinutesWrap'))$('trafficRepeatMinutesWrap').hidden=$('trafficRepeatMode').value!=='interval';
-}
-function renderTrafficPrefs(force=false){
-  if(!$('trafficPrefsCard'))return;
-  const t=D.transport||{},p=t.prefs||{};
-  const transportOffline=moduleCfg('transport').online===false;
-  const hiddenByAdmin=me?.role!=='admin'&&t.userSettingsVisible===false;
-  $('trafficPrefsCard').hidden=t.enabled===false||transportOffline||hiddenByAdmin;
-  if(trafficPrefsDirty&&!force)return;
-  $('trafficNotifyEnabled').checked=!!p.notificationsEnabled;
-  $('trafficSeverity').value=p.severity||'significant';
-  $('trafficRepeatMode').value=p.repeatMode||'change';
-  $('trafficRepeatMinutes').value=String(p.repeatMinutes||60);
-  $('trafficResolved').checked=p.resolved!==false;
-  const selected=new Set(p.corridorIds||[]);
-  $('trafficPrefsCorridors').innerHTML=(t.corridors||[]).map(x=>'<label class="traffic-pref-item"><input class="traffic-pref-corridor" type="checkbox" value="'+e(x.id)+'" '+(selected.has(x.id)?'checked':'')+'><span><b>'+e(x.name)+'</b><span class="small" style="display:block">'+e(x.description||'')+'</span></span></label>').join('')||'<div class="small">Admin zatím nenastavil žádné sledované úseky.</div>';
-  document.querySelectorAll('.traffic-pref-corridor').forEach(x=>x.onchange=()=>{trafficPrefsDirty=true});
-  updateTrafficRepeatVisibility();
-}
-
-
 function localDateISO(d=new Date()){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day}
 function addDaysISO(base,n){const d=new Date(base+'T12:00:00');d.setDate(d.getDate()+n);return localDateISO(d)}
 function tireTaskCategoryLabel(v){
@@ -1158,8 +1035,6 @@ function renderModuleShell(){
   if($('maintenanceVehicles'))renderVehiclePreviews('maintenanceVehicles','maintenance');
   if($('settingsUser'))$('settingsUser').textContent=me?.name||'—';
   if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);if($('themeMode'))$('themeMode').value=themePreference();if($('themeCurrent'))$('themeCurrent').textContent=document.documentElement.dataset.theme==='dark'?'🌙 Tmavý':'☀️ Světlý';
-  renderTrafficPrefs();
-  if($('homeTrafficStatus'))$('homeTrafficStatus').textContent=trafficHomeText();
   if($('homeNotificationBadge')){$('homeNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('homeNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
   if($('headerNotificationBadge')){$('headerNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('headerNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
   renderHomePulse();
@@ -1211,37 +1086,6 @@ function renderSystemControls(){
   $('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE;
   updateSystemModeEditor(false);
   $('systemModeMeta').textContent=s.updatedAt?'Poslední změna: '+dt(s.updatedAt)+(s.updatedBy?' · '+s.updatedBy:''):'Režim zatím nebyl ručně měněn.';
-}
-
-function renderTransportAdmin(){
-  if(me?.role!=='admin'||!$('adminTrafficCorridors'))return;
-  const t=D.transportAdmin||{};
-  const source=$('trafficAdminSource');
-  source.classList.toggle('traffic-source-ok',!!t.sourceConfigured);
-  source.classList.toggle('traffic-source-warn',!t.sourceConfigured);
-  $('trafficAdminSourceText').textContent=t.sourceConfigured?'Golemio API klíč je bezpečně uložený na serveru. Přístup ke konkrétním dopravním zdrojům se ověřuje při načtení reportu.':'Golemio API klíč zatím není v prostředí Vercelu. Modul funguje, ale živá dopravní data se nezačnou načítat, dokud se klíč nepřidá.';
-  $('transportEnabled').checked=t.enabled!==false;
-  $('transportNotificationsEnabled').checked=t.notificationsEnabled!==false;
-  $('transportUserSettingsVisible').checked=t.userSettingsVisible!==false;
-  $('transportCacheMinutes').value=String(t.cacheMinutes||3);
-  $('transportPollMinutes').value=String(t.pollMinutes||5);
-  $('adminTrafficCorridors').innerHTML=(t.corridors||[]).map(x=>
-    '<div class="traffic-admin-row"><div class="top"><div><b>'+e(x.name)+'</b><div class="small">'+e(x.description||'')+'</div></div><span class="badge">'+(x.type==='area'?'Oblast':'Úsek')+'</span></div>'+
-    '<div class="switchline"><input class="traffic-active" data-id="'+e(x.id)+'" type="checkbox" '+(x.active!==false?'checked':'')+'><span>Aktivní v reportu</span></div>'+
-    '<div class="switchline"><input class="traffic-notify-allowed" data-id="'+e(x.id)+'" type="checkbox" '+(x.notifyAllowed!==false?'checked':'')+'><span>Povolit upozornění z tohoto úseku</span></div>'+
-    '<div class="small">Rozpoznávání: '+e((x.matchTerms||[]).join(', '))+'</div>'+
-    '<div class="toolbar" style="margin-top:8px"><button class="edit-traffic secondary" data-id="'+e(x.id)+'">Upravit</button><button class="delete-traffic danger-btn" data-id="'+e(x.id)+'">Odstranit</button></div></div>'
-  ).join('')||'<div class="small">Žádné sledované úseky.</div>';
-  document.querySelectorAll('.traffic-active').forEach(x=>x.onchange=async()=>{try{await api('adminUpdateTransportCorridor',{id:x.dataset.id,active:x.checked});await refresh()}catch(err){alert(errorText(err))}});
-  document.querySelectorAll('.traffic-notify-allowed').forEach(x=>x.onchange=async()=>{try{await api('adminUpdateTransportCorridor',{id:x.dataset.id,notifyAllowed:x.checked});await refresh()}catch(err){alert(errorText(err))}});
-  document.querySelectorAll('.edit-traffic').forEach(b=>b.onclick=async()=>{
-    const x=(D.transportAdmin?.corridors||[]).find(v=>v.id===b.dataset.id);if(!x)return;
-    const name=prompt('Název sledovaného úseku:',x.name);if(name===null)return;
-    const description=prompt('Krátký popis:',x.description||'');if(description===null)return;
-    const terms=prompt('Rozpoznávací názvy oddělené čárkou:',(x.matchTerms||[]).join(', '));if(terms===null)return;
-    try{await api('adminUpdateTransportCorridor',{id:x.id,name,description,matchTerms:terms});await refresh()}catch(err){alert(errorText(err))}
-  });
-  document.querySelectorAll('.delete-traffic').forEach(b=>b.onclick=async()=>{const x=(D.transportAdmin?.corridors||[]).find(v=>v.id===b.dataset.id);if(!x)return;if(!confirm('Odstranit sledovaný úsek „'+x.name+'“?'))return;try{await api('adminDeleteTransportCorridor',{id:x.id});await refresh()}catch(err){alert(errorText(err))}});
 }
 
 function updateModuleControlUi(box){
@@ -1434,7 +1278,7 @@ function parseCsvLine(line,delimiter){const out=[];let cur='',q=false;for(let i=
 $('importCars').onclick=async()=>{const file=$('csvImport').files?.[0];if(!file)return note($('importMsg'),'Vyber CSV soubor.','msg err');const text=await file.text(),lines=text.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim());if(!lines.length)return;const delimiter=(lines[0].match(/;/g)||[]).length>=(lines[0].match(/,/g)||[]).length?';':',';let rows=lines.map(l=>parseCsvLine(l,delimiter));if(rows[0]&&/spz|plate/i.test(rows[0][0]))rows.shift();const payload=rows.map(r=>({plate:r[0],name:r[1]||''})).filter(r=>r.plate);try{const result=await api('adminImportCars',{rows:payload});note($('importMsg'),'Přidáno '+result.added+' aut, přeskočeno '+result.skipped+'.','msg ok');$('csvImport').value='';await refresh()}catch(x){note($('importMsg'),errorText(x),'msg err')}};
 $('backupJson').onclick=async()=>{try{const data=await api('adminBackup');downloadBlob(JSON.stringify(data,null,2),'application/json;charset=utf-8','DOT-Evidence-Backup-'+new Date().toISOString().slice(0,10)+'.json')}catch(x){alert(errorText(x))}};
 
-function renderAdmin(){renderAdminDashboard();renderModuleControls();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderTransportAdmin();renderAudit()}
+function renderAdmin(){renderAdminDashboard();renderModuleControls();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderAudit()}
 function allowedTab(id){return id==='entry'?can('dotCreate'):id==='season'?hasPneuAccess():id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):false}
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
@@ -1442,13 +1286,12 @@ function applyAccess(){
   $('pushCard').style.display='';
   $('fleetFiltersCard').style.display=can('fleetView')?'':'none';
   $('fleetListCard').style.display=can('fleetView')?'':'none';
-  if($('saveTrafficPrefs'))$('saveTrafficPrefs').disabled=isReadOnly();
   if(currentModule==='admin'&&me.role!=='admin')openModule('home');
   if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
   if(MODULE_KEYS.includes(currentModule)&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
   else if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).visible===false)openModule('home');
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin'&&D.adminLoaded)renderAdmin();else if(me.role!=='admin')renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin'&&D.adminLoaded)renderAdmin();else if(me.role!=='admin')renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='season')renderSeasonDashboard();if(doRefresh){loadPneuData(false).catch(()=>{});if(id==='fleet'&&can('fleetView'))loadFleetData(false).catch(()=>{});if(id==='history'&&can('historyView'))loadHistoryPage(true).catch(()=>{})}}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
@@ -1490,29 +1333,6 @@ if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
   }
   catch(x){note($('systemModeMsg'),errorText(x),'msg err')}
   finally{$('saveSystemMode').disabled=false}
-};
-if($('trafficRefresh'))$('trafficRefresh').onclick=()=>loadTrafficReport(true).catch(()=>{});
-['trafficNotifyEnabled','trafficSeverity','trafficRepeatMode','trafficRepeatMinutes','trafficResolved'].forEach(id=>{if($(id))$(id).onchange=()=>{trafficPrefsDirty=true;if(id==='trafficRepeatMode')updateTrafficRepeatVisibility()}});
-if($('saveTrafficPrefs'))$('saveTrafficPrefs').onclick=async()=>{
-  const prefs={
-    notificationsEnabled:$('trafficNotifyEnabled').checked,
-    corridorIds:[...document.querySelectorAll('.traffic-pref-corridor:checked')].map(x=>x.value),
-    severity:$('trafficSeverity').value,
-    repeatMode:$('trafficRepeatMode').value,
-    repeatMinutes:+$('trafficRepeatMinutes').value,
-    resolved:$('trafficResolved').checked,
-  };
-  if(!prefs.corridorIds.length)return note($('trafficPrefsMsg'),'Vyber alespoň jeden sledovaný úsek.','msg err');
-  try{const r=await api('saveTransportPrefs',{prefs});D.transport.prefs=r.prefs;trafficPrefsDirty=false;note($('trafficPrefsMsg'),'Nastavení Dopravního reportu je uložené.','msg ok');renderTrafficPrefs(true)}
-  catch(x){note($('trafficPrefsMsg'),errorText(x),'msg err')}
-};
-if($('saveTransportSettings'))$('saveTransportSettings').onclick=async()=>{
-  const settings={enabled:$('transportEnabled').checked,notificationsEnabled:$('transportNotificationsEnabled').checked,userSettingsVisible:$('transportUserSettingsVisible').checked,cacheMinutes:+$('transportCacheMinutes').value,pollMinutes:+$('transportPollMinutes').value};
-  try{await api('adminSaveTransportSettings',{settings});note($('transportAdminMsg'),'Nastavení Dopravy je uložené.','msg ok');await refresh()}catch(x){note($('transportAdminMsg'),errorText(x),'msg err')}
-};
-if($('addTrafficCorridor'))$('addTrafficCorridor').onclick=async()=>{
-  const name=$('newTrafficName').value.trim(),type=$('newTrafficType').value,matchTerms=$('newTrafficTerms').value.trim(),description=$('newTrafficDescription').value.trim();
-  try{await api('adminAddTransportCorridor',{name,type,matchTerms,description});$('newTrafficName').value=$('newTrafficTerms').value=$('newTrafficDescription').value='';note($('newTrafficMsg'),'Sledovaný úsek byl přidán.','msg ok');await refresh()}catch(x){note($('newTrafficMsg'),errorText(x),'msg err')}
 };
 document.querySelectorAll('[data-notification-view]').forEach(b=>b.onclick=()=>{notificationView=b.dataset.notificationView;renderNotifications()});
 if($('saveNotificationPrefs'))$('saveNotificationPrefs').onclick=async()=>{
@@ -1592,11 +1412,6 @@ async function heartbeat(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){markActivity();syncCheck(true)}heartbeat()});
 window.addEventListener('pagehide',()=>{if(!tok)return;fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({action:'heartbeat',visible:false,active:false}),keepalive:true}).catch(()=>{})});
-setInterval(()=>{
-  if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false||moduleCfg('transport').online===false)return;
-  const mins=Math.max(3,Number(D.transport?.pollMinutes||5));
-  if(Date.now()-lastTrafficLoad>=mins*60000)loadTrafficReport(false).catch(()=>{});
-},60000);
 setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))syncCheck()},30000);
 setInterval(()=>{if(tok&&currentModule==='admin'&&me?.role==='admin')loadAdminState(true).catch(()=>{})},60000);
 setInterval(()=>{if(tok&&document.visibilityState==='visible')heartbeat()},90000);
