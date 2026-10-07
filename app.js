@@ -13,7 +13,7 @@ const MODULE_META={
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
 };
 const MODULE_KEYS=Object.keys(MODULE_META);
-const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['vehicleAdd','Přidat vozidlo'],['vehicleCategoryAdd','Přidat skupinu vozidel'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['tireTaskCreate','Vytvořit task'],['tireTaskEdit','Editovat task'],['notificationsReceive','Přijímat oznámení'],['notificationsSendOperational','Odesílat provozní oznámení']];
+const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['vehicleAdd','Přidat vozidlo'],['vehicleCategoryAdd','Spravovat skupiny vozidel'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['tireTaskCreate','Vytvořit task'],['tireTaskEdit','Editovat task'],['notificationsReceive','Přijímat oznámení'],['notificationsSendOperational','Odesílat provozní oznámení']];
 const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','vehicleAdd','vehicleCategoryAdd','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsSendOperational']);
 function isReadOnly(){return me?.role!=='admin'&&D.system?.mode==='read_only'}
 function can(k){if(isReadOnly()&&WRITE_PERMS.has(k))return false;return me?.role==='admin'||!!D.permissions?.[k]}
@@ -47,7 +47,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
@@ -913,6 +913,11 @@ function renderVehicleOverview(){
   const addCard=$('vehicleOverviewAddCard'),categoryCard=$('vehicleOverviewCategoryAddCard');
   if(addCard)addCard.hidden=!can('vehicleAdd');
   if(categoryCard)categoryCard.hidden=!can('vehicleCategoryAdd');
+  if($('vehicleOverviewCategoryManageList')){
+    $('vehicleOverviewCategoryManageList').innerHTML=(D.vehicleCategories||[]).map(cat=>'<div class="category-manage-row"><span class="vehicle-category-badge">'+e(cat)+'</span><div class="toolbar"><button class="category-rename secondary" data-category="'+e(cat)+'">✏️ Přejmenovat</button><button class="category-delete danger-btn" data-category="'+e(cat)+'">🗑 Smazat</button></div></div>').join('')||'<div class="small">Nejsou vytvořené žádné skupiny.</div>';
+    document.querySelectorAll('.category-rename').forEach(b=>b.onclick=()=>renameVehicleCategory(b.dataset.category));
+    document.querySelectorAll('.category-delete').forEach(b=>b.onclick=()=>deleteVehicleCategory(b.dataset.category));
+  }
   if($('vehicleOverviewAddCategory')){
     const cur=$('vehicleOverviewAddCategory').value;
     $('vehicleOverviewAddCategory').innerHTML='<option value="">Vyber kategorii…</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'">'+e(x)+'</option>').join('');
@@ -956,6 +961,19 @@ function renderVehicleOverview(){
   }).join('')||'<div class="card"><div class="small">'+((q||category)?'Žádné vozidlo neodpovídá zvolenému hledání nebo skupině.':'V evidenci zatím nejsou žádná vozidla.')+'</div></div>';
 }
 
+async function renameVehicleCategory(category){
+  if(!can('vehicleCategoryAdd'))return;
+  const next=prompt('Nový název skupiny:',category);if(next===null)return;
+  const clean=next.trim();if(!clean)return alert('Název skupiny nesmí být prázdný.');
+  if(clean.toLocaleUpperCase('cs-CZ')===String(category).toLocaleUpperCase('cs-CZ'))return;
+  if(!confirm('Přejmenovat skupinu „'+category+'“ na „'+clean+'“?\n\nZměna se propíše i do vozidel a aktivních TASKů.'))return;
+  try{const r=await api('vehicleCategoryRename',{category,newCategory:clean});await refresh();alert('Skupina přejmenována. Upraveno '+r.changedCars+' vozidel a '+r.changedTasks+' aktivních TASKů.')}catch(x){alert(errorText(x))}
+}
+async function deleteVehicleCategory(category){
+  if(!can('vehicleCategoryAdd'))return;
+  if(!confirm('Opravdu smazat skupinu „'+category+'“?\n\nSmazání projde jen pokud ji nepoužívá žádné vozidlo ani aktivní TASK.'))return;
+  try{await api('vehicleCategoryDelete',{category});await refresh()}catch(x){alert(errorText(x))}
+}
 function renderVehiclePreviews(target,kind){
   const cars=(D.cars||[]).slice(0,80);
   $(target).innerHTML=cars.map(car=>{
@@ -1136,7 +1154,9 @@ function vehicleCategoryOptions(selected='',allowEmpty=false){
 }
 function renderVehicleCategories(){
   const sel=$('newVehicleCategory');if(sel){const cur=sel.value;sel.innerHTML=vehicleCategoryOptions(cur,false);if(cur&&(D.vehicleCategories||[]).includes(cur))sel.value=cur}
-  if($('vehicleCategoryList'))$('vehicleCategoryList').innerHTML=(D.vehicleCategories||[]).map(x=>'<span class="vehicle-category-badge">'+e(x)+'</span>').join(' ')||'<span class="small">Žádné kategorie.</span>';
+  if($('vehicleCategoryList'))$('vehicleCategoryList').innerHTML=(D.vehicleCategories||[]).map(x=>'<div class="category-manage-row"><span class="vehicle-category-badge">'+e(x)+'</span><div class="toolbar"><button class="admin-category-rename secondary" data-category="'+e(x)+'">✏️</button><button class="admin-category-delete danger-btn" data-category="'+e(x)+'">🗑</button></div></div>').join('')||'<span class="small">Žádné kategorie.</span>';
+  document.querySelectorAll('.admin-category-rename').forEach(b=>b.onclick=()=>renameVehicleCategory(b.dataset.category));
+  document.querySelectorAll('.admin-category-delete').forEach(b=>b.onclick=()=>deleteVehicleCategory(b.dataset.category));
 }
 function editCar(id){editingCarId=id;renderAdminCars()}
 function cancelCarEdit(){editingCarId=null;renderAdminCars()}
@@ -1178,7 +1198,7 @@ function renderAdminCars(){
 $('selectAllActive').onclick=()=>document.querySelectorAll('.active-car-check').forEach(x=>x.checked=true);$('selectAllArchived').onclick=()=>document.querySelectorAll('.arch-car-check').forEach(x=>x.checked=true);
 async function bulkCars(selector,active){const ids=[...document.querySelectorAll(selector+':checked')].map(x=>x.value);if(!ids.length)return alert('Nejdřív vyber auta.');if(!confirm((active?'Obnovit ':'Archivovat ')+ids.length+' aut?'))return;await api('adminBulkCars',{carIds:ids,active});await refresh()}
 $('bulkArchive').onclick=()=>bulkCars('.active-car-check',false);$('bulkRestore').onclick=()=>bulkCars('.arch-car-check',true);
-if($('addVehicleCategory'))$('addVehicleCategory').onclick=async()=>{const category=$('newVehicleCategoryName').value.trim();if(!category)return note($('vehicleCategoryMsg'),'Zadej název kategorie.','msg err');try{await api('adminAddVehicleCategory',{category});$('newVehicleCategoryName').value='';note($('vehicleCategoryMsg'),'Kategorie byla přidána.','msg ok');await refresh()}catch(x){note($('vehicleCategoryMsg'),errorText(x),'msg err')}};
+if($('addVehicleCategory'))$('addVehicleCategory').onclick=async()=>{const category=$('newVehicleCategoryName').value.trim();if(!category)return note($('vehicleCategoryMsg'),'Zadej název kategorie.','msg err');try{await api('vehicleCategoryAdd',{category});$('newVehicleCategoryName').value='';note($('vehicleCategoryMsg'),'Kategorie byla přidána.','msg ok');await refresh()}catch(x){note($('vehicleCategoryMsg'),errorText(x),'msg err')}};
 
 // Admin users
 $('addUser').onclick=async()=>{const name=$('newUserName').value.trim(),pin=$('newUserPin').value.replace(/\D/g,'').slice(0,4),role=$('newUserRole').value;if(!name||pin.length!==4)return alert('Zadej jméno a čtyřmístný PIN.');try{await api('adminAddUser',{name,pin,role});$('newUserName').value=$('newUserPin').value='';$('newUserRole').value='driver';await refresh()}catch(x){alert(errorText(x))}};

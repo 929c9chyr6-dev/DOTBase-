@@ -166,7 +166,7 @@ function publicModules(cfg,currentUser){
 function actionModule(action){
   if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
   if (['tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
-  if (['vehicleAdd','vehicleCategoryAdd'].includes(action)) return 'vehicleOverview';
+  if (['vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
   if (['sendOperationalNotification'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
@@ -271,8 +271,7 @@ function normalizeVehicleCategories(raw, cars = []) {
     if (!name || seen.has(name)) return;
     seen.add(name); out.push(name);
   };
-  DEFAULT_VEHICLE_CATEGORIES.forEach(add);
-  (Array.isArray(raw) ? raw : []).forEach(add);
+  (Array.isArray(raw) ? raw : DEFAULT_VEHICLE_CATEGORIES).forEach(add);
   (Array.isArray(cars) ? cars : []).forEach((c)=>add(c?.category));
   return out;
 }
@@ -1528,6 +1527,46 @@ export default async function handler(req, res) {
       if (cfg.vehicleCategories.includes(category)) return json(res,409,{error:'VEHICLE_CATEGORY_DUPLICATE'});
       cfg.vehicleCategories.push(category);await writeConfig(cfg);
       await appendAudit(currentUser,'vehicle_category_add',`Přidána kategorie vozidel ${category}`,{category});
+      return json(res,200,{ok:true,vehicleCategories:cfg.vehicleCategories});
+    }
+
+    if (body.action === 'vehicleCategoryRename') {
+      if (!hasPermission(currentUser,'vehicleCategoryAdd')) return json(res,403,{error:'PERMISSION'});
+      const from=cleanVehicleCategory(body.category),to=cleanVehicleCategory(body.newCategory);
+      if(!from||!to||!cfg.vehicleCategories.includes(from))return json(res,400,{error:'VEHICLE_CATEGORY'});
+      if(from===to)return json(res,200,{ok:true,vehicleCategories:cfg.vehicleCategories,changedCars:0,changedTasks:0});
+      if(cfg.vehicleCategories.includes(to))return json(res,409,{error:'VEHICLE_CATEGORY_DUPLICATE'});
+      const now=new Date().toISOString();
+      let changedCars=0;
+      for(const car of cfg.cars){
+        if(cleanVehicleCategory(car.category)===from){
+          car.category=to;car.updatedAt=now;touchCar(car,currentUser,now);changedCars++;
+        }
+      }
+      const tasks=await getTireTasks();let changedTasks=0;
+      for(const task of tasks){
+        if(task.status!=='closed'&&cleanVehicleCategory(task.category)===from){task.category=to;task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;changedTasks++}
+      }
+      cfg.vehicleCategories=cfg.vehicleCategories.map((x)=>x===from?to:x);
+      await writeConfig(cfg);
+      if(changedTasks)await writeTireTasks(tasks);
+      await appendAudit(currentUser,'vehicle_category_rename',`Kategorie vozidel ${from} přejmenována na ${to}`,{from,to,changedCars,changedTasks});
+      return json(res,200,{ok:true,vehicleCategories:cfg.vehicleCategories,changedCars,changedTasks});
+    }
+
+    if (body.action === 'vehicleCategoryDelete') {
+      if (!hasPermission(currentUser,'vehicleCategoryAdd')) return json(res,403,{error:'PERMISSION'});
+      const category=cleanVehicleCategory(body.category);
+      if(!category||!cfg.vehicleCategories.includes(category))return json(res,400,{error:'VEHICLE_CATEGORY'});
+      const carsUsing=cfg.cars.filter((c)=>cleanVehicleCategory(c.category)===category);
+      const tasks=await getTireTasks();
+      const tasksUsing=tasks.filter((t)=>t.status!=='closed'&&cleanVehicleCategory(t.category)===category);
+      if(carsUsing.length||tasksUsing.length){
+        return json(res,409,{error:'VEHICLE_CATEGORY_IN_USE',message:`Kategorii nelze smazat. Používá ji ${carsUsing.length} vozidel a ${tasksUsing.length} aktivních TASKů. Nejdřív je přesuň do jiné kategorie.`,cars:carsUsing.length,tasks:tasksUsing.length});
+      }
+      cfg.vehicleCategories=cfg.vehicleCategories.filter((x)=>x!==category);
+      await writeConfig(cfg);
+      await appendAudit(currentUser,'vehicle_category_delete',`Smazána kategorie vozidel ${category}`,{category});
       return json(res,200,{ok:true,vehicleCategories:cfg.vehicleCategories});
     }
 
