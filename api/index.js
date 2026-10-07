@@ -578,6 +578,24 @@ function buildVehicleOverview(cfg, recs, tireTasks = []) {
     };
   }).sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'cs'));
 }
+function seasonCampaignYear(season,value){
+  const d=pragueDate(value),parts=d.split('-'),year=Number(parts[0]),month=Number(parts[1]);
+  if(!Number.isFinite(year)||!Number.isFinite(month))return null;
+  return season==='winter'?(month>=7?year:year-1):year;
+}
+function buildSeasonRecordEvidence(recs){
+  const map=new Map();
+  for(const r of recs||[]){
+    if(!['summer','winter'].includes(r.season))continue;
+    const campaignYear=seasonCampaignYear(r.season,r.ts||r.createdAt);
+    if(!campaignYear)continue;
+    const key=r.carId+':'+r.season+':'+campaignYear,prev=map.get(key);
+    if(!prev||Number(r.ts||0)>Number(prev.ts||0)){
+      map.set(key,{carId:r.carId,season:r.season,campaignYear,createdAt:r.createdAt||new Date(r.ts).toISOString(),ts:Number(r.ts)||0,dot:r.dot||'',dotFront:r.dotFront||'',dotRear:r.dotRear||'',splitDot:!!r.splitDot,mileage:Number(r.mileage)||0});
+    }
+  }
+  return [...map.values()].sort((a,b)=>(b.campaignYear-a.campaignYear)||(b.ts-a.ts));
+}
 function latestRecord(recs, carId, season) {
   return recs.find((r) => r.carId === carId && (!season || r.season === season));
 }
@@ -701,6 +719,7 @@ async function publicState(cfg, recs, currentUser) {
     vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
     cars: cfg.cars.filter((c) => c.active !== false),
     vehicleOverview: buildVehicleOverview(cfg, recs, tireTaskRows),
+    seasonRecords: userCanAccessModule(cfg,'pneu',currentUser)&&['dotCreate','fleetView','historyView','attentionView'].some((k)=>perms[k]) ? buildSeasonRecordEvidence(recs) : [],
     tireTasks: userCanAccessModule(cfg,'tiretask',currentUser) ? publicTireTasks(cfg,tireTaskRows) : [],
     tireTaskCapabilities: tireTaskCapabilities(currentUser),
     tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),

@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[];
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='';
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -68,7 +68,7 @@ async function login(){
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
     if(tab==='admin')openModule('admin');
-    else if(['entry','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
+    else if(['entry','season','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
     else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
@@ -339,6 +339,132 @@ async function openVehicle(carId){
 async function openAdminVehicle(carId){return openVehicle(carId)}
 
 // Fleet filters/export
+function seasonCampaignKey(seasonValue,dateValue){
+  const raw=String(dateValue||'').slice(0,10),m=raw.match(/^(\d{4})-(\d{2})/);
+  if(!m)return '';
+  const year=Number(m[1]),month=Number(m[2]),campaignYear=seasonValue==='winter'?(month>=7?year:year-1):year;
+  return seasonValue+':'+campaignYear;
+}
+function currentSeasonCampaignKey(){
+  const today=localDateISO(),year=Number(today.slice(0,4)),month=Number(today.slice(5,7));
+  return (month>=10||month<=3)?'winter:'+(month<=3?year-1:year):'summer:'+year;
+}
+function seasonCampaignLabel(key){
+  const [s,yRaw]=String(key||'').split(':'),y=Number(yRaw);
+  return s==='winter'?'❄️ Zima '+y+'/'+String(y+1).slice(-2):'☀️ Léto '+y;
+}
+function seasonCampaignSortValue(key){
+  const [s,yRaw]=String(key||'').split(':'),y=Number(yRaw)||0;
+  return y*12+(s==='winter'?10:4);
+}
+function seasonCampaignOptions(){
+  const currentYear=Number(localDateISO().slice(0,4)),keys=new Set();
+  for(let y=currentYear-3;y<=currentYear+1;y++){keys.add('summer:'+y);keys.add('winter:'+y)}
+  (D.seasonRecords||[]).forEach(r=>keys.add(r.season+':'+r.campaignYear));
+  (D.vehicleOverview||[]).forEach(v=>(v.activeTasks||[]).forEach(t=>{const k=seasonCampaignKey(t.targetSeason,t.date);if(k)keys.add(k)}));
+  return [...keys].sort((a,b)=>seasonCampaignSortValue(b)-seasonCampaignSortValue(a));
+}
+function seasonTaskForCar(carId,seasonValue,campaignYear){
+  const v=(D.vehicleOverview||[]).find(x=>x.id===carId);
+  return (v?.activeTasks||[]).filter(t=>t.targetSeason===seasonValue&&seasonCampaignKey(t.targetSeason,t.date)===seasonValue+':'+campaignYear)
+    .sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')))[0]||null;
+}
+function seasonRowForCar(car,key){
+  const [seasonValue,yRaw]=String(key||'').split(':'),campaignYear=Number(yRaw);
+  const record=(D.seasonRecords||[]).find(r=>r.carId===car.id&&r.season===seasonValue&&Number(r.campaignYear)===campaignYear)||null;
+  const task=seasonTaskForCar(car.id,seasonValue,campaignYear);
+  let status='waiting';
+  if(record)status='done';
+  else if(task?.status==='problem')status='problem';
+  else if(task)status='scheduled';
+  return {car,season:seasonValue,campaignYear,record,task,status};
+}
+function seasonStatusMeta(status){
+  return status==='done'?{icon:'✅',label:'PŘEZUTO',cls:'done'}:
+    status==='scheduled'?{icon:'📋',label:'NAPLÁNOVÁNO',cls:'scheduled'}:
+    status==='problem'?{icon:'⚠️',label:'PROBLÉM',cls:'problem'}:
+    {icon:'⏳',label:'BEZ TERMÍNU',cls:'waiting'};
+}
+function seasonShortDate(v){
+  if(!v)return '—';
+  const d=new Date(String(v).length===10?v+'T12:00:00':v);
+  return Number.isNaN(d.getTime())?String(v):new Intl.DateTimeFormat('cs-CZ',{day:'numeric',month:'numeric',year:'numeric'}).format(d);
+}
+function canPlanSeasonTask(){
+  return can('tireTaskCreate')&&moduleCfg('tiretask').online!==false&&moduleCfg('tiretask').visible!==false;
+}
+function planSeasonVehicle(carId,seasonValue){
+  const car=(D.cars||[]).find(c=>c.id===carId);if(!car)return;
+  tireTaskDraftRows=[newTireTaskDraftRow({carId:car.id,category:car.category||'',targetSeason:seasonValue})];
+  openModule('tiretask');
+  if($('tireTaskDate'))$('tireTaskDate').value=localDateISO();
+  renderTireTask();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+function openSeasonPneuEntry(carId,seasonValue,taskId=''){
+  const linked=(D.tireTasks||[]).find(t=>t.id===taskId);
+  if(linked)return openPneuFromTireTask(linked.id);
+  pendingTireTaskId=null;openModule('pneu');showTab('entry',false);
+  carSearch='';$('carSearch').value='';if($('carCategory'))$('carCategory').value='';
+  renderCarOptions(carId);$('car').value=carId;rememberCar(carId);prefillMileage(carId);setSeason(seasonValue);valid();
+}
+function renderSeasonDashboard(){
+  if(!$('seasonList'))return;
+  const options=seasonCampaignOptions();
+  if(!seasonDashboardCampaign||!options.includes(seasonDashboardCampaign))seasonDashboardCampaign=currentSeasonCampaignKey();
+  const campaignSelect=$('seasonCampaign'),selectedBefore=campaignSelect.value||seasonDashboardCampaign;
+  campaignSelect.innerHTML=options.map(k=>'<option value="'+e(k)+'">'+e(seasonCampaignLabel(k))+'</option>').join('');
+  seasonDashboardCampaign=options.includes(selectedBefore)?selectedBefore:seasonDashboardCampaign;
+  campaignSelect.value=seasonDashboardCampaign;
+
+  const categorySelect=$('seasonCategory'),categoryBefore=categorySelect.value;
+  categorySelect.innerHTML='<option value="">Všechny skupiny</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'">'+e(x)+'</option>').join('');
+  if((D.vehicleCategories||[]).includes(categoryBefore))categorySelect.value=categoryBefore;
+
+  const [seasonValue,yRaw]=seasonDashboardCampaign.split(':'),campaignYear=Number(yRaw);
+  const allRows=(D.cars||[]).map(c=>seasonRowForCar(c,seasonDashboardCampaign));
+  const totals={done:0,scheduled:0,waiting:0,problem:0};allRows.forEach(r=>totals[r.status]++);
+  const total=allRows.length,donePct=total?Math.round(totals.done/total*100):0;
+  $('seasonHeadline').innerHTML='<div><b>'+e(seasonCampaignLabel(seasonDashboardCampaign))+'</b><span>'+totals.done+' / '+total+' vozidel přezuto</span></div><strong>'+donePct+' %</strong>';
+  $('seasonProgressBar').style.width=donePct+'%';
+  $('seasonStats').innerHTML=[
+    ['✅','Přezuto',totals.done,'done'],['📋','Naplánováno',totals.scheduled,'scheduled'],['⏳','Bez termínu',totals.waiting,'waiting'],['⚠️','Problém',totals.problem,'problem']
+  ].map(([i,l,n,c])=>'<button class="season-stat '+c+'" data-season-status="'+c+'"><span>'+i+' '+l+'</span><b>'+n+'</b></button>').join('');
+
+  const groups=[...(D.vehicleCategories||[])].map(cat=>{
+    const rows=allRows.filter(r=>r.car.category===cat),done=rows.filter(r=>r.status==='done').length,pct=rows.length?Math.round(done/rows.length*100):0;
+    return {cat,total:rows.length,done,pct};
+  }).filter(g=>g.total).sort((a,b)=>a.cat.localeCompare(b.cat,'cs'));
+  $('seasonGroups').innerHTML=groups.map(g=>'<button class="season-group" data-season-category="'+e(g.cat)+'"><div class="top"><b>'+e(g.cat)+'</b><span>'+g.done+' / '+g.total+' · '+g.pct+' %</span></div><div class="season-mini-progress"><span style="width:'+g.pct+'%"></span></div></button>').join('')||'<div class="small">Žádné skupiny vozidel.</div>';
+
+  const q=$('seasonSearch').value.trim().toLocaleUpperCase('cs-CZ'),category=$('seasonCategory').value,status=$('seasonStatus').value;
+  const filtered=allRows.filter(r=>{
+    const hay=[r.car.plate,r.car.name,r.car.vin,r.car.category].join(' ').toLocaleUpperCase('cs-CZ');
+    return(!q||hay.includes(q))&&(!category||r.car.category===category)&&(!status||r.status===status);
+  }).sort((a,b)=>{
+    const order={problem:0,waiting:1,scheduled:2,done:3},d=(order[a.status]??9)-(order[b.status]??9);
+    if(d)return d;
+    return String(a.car.plate).localeCompare(String(b.car.plate),'cs');
+  });
+  $('seasonCount').textContent='Zobrazeno '+filtered.length+' z '+total+' vozidel';
+  const currentCampaign=seasonDashboardCampaign===currentSeasonCampaignKey();
+  $('seasonList').innerHTML=filtered.map(r=>{
+    const m=seasonStatusMeta(r.status),task=r.task,record=r.record;
+    let detail='';
+    if(record)detail='DOT <b>'+e(dotLabel(record))+'</b> · '+Number(record.mileage||0).toLocaleString('cs-CZ')+' km · zapsáno '+seasonShortDate(record.createdAt);
+    else if(task)detail=(task.date?seasonShortDate(task.date):'Bez data')+' · '+(task.time?e(task.time):'CELÝ DEN')+(task.status==='in_progress'?' · rozpracováno':task.status==='problem'?' · '+e(task.problemNote||'problém'):'');
+    else detail='V této sezóně zatím bez DOT záznamu a bez TIRETASKu.';
+    let actions='';
+    if(currentCampaign&&can('dotCreate'))actions+='<button class="season-dot primary" data-car="'+e(r.car.id)+'" data-season="'+e(seasonValue)+'" data-task="'+e(task?.id||'')+'">🛞 Zapsat PNEU/DOT</button>';
+    if(currentCampaign&&r.status==='waiting'&&canPlanSeasonTask())actions+='<button class="season-plan secondary" data-car="'+e(r.car.id)+'" data-season="'+e(seasonValue)+'">＋ Naplánovat přezutí</button>';
+    return '<div class="season-vehicle '+m.cls+'"><div class="season-vehicle-head"><div><b>'+e(r.car.plate)+'</b> · '+e(r.car.name||'')+'<div class="small">'+e(r.car.category||'BEZ SKUPINY')+'</div></div><span class="season-status '+m.cls+'">'+m.icon+' '+m.label+'</span></div><div class="season-vehicle-detail">'+detail+'</div>'+(actions?'<div class="toolbar" style="margin-top:8px">'+actions+'</div>':'')+'</div>';
+  }).join('')||'<div class="small">Filtru neodpovídá žádné vozidlo.</div>';
+
+  document.querySelectorAll('.season-stat').forEach(b=>b.onclick=()=>{$('seasonStatus').value=$('seasonStatus').value===b.dataset.seasonStatus?'':b.dataset.seasonStatus;renderSeasonDashboard()});
+  document.querySelectorAll('.season-group').forEach(b=>b.onclick=()=>{$('seasonCategory').value=b.dataset.seasonCategory;renderSeasonDashboard()});
+  document.querySelectorAll('.season-plan').forEach(b=>b.onclick=()=>planSeasonVehicle(b.dataset.car,b.dataset.season));
+  document.querySelectorAll('.season-dot').forEach(b=>b.onclick=()=>openSeasonPneuEntry(b.dataset.car,b.dataset.season,b.dataset.task));
+}
 function renderFleetUsers(){const current=$('fleetUser').value,users=new Map();D.records.forEach(r=>users.set(r.userId,r.userName));$('fleetUser').innerHTML='<option value="">Všichni uživatelé</option>'+[...users.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),'cs')).map(([id,name])=>'<option value="'+e(id)+'">'+e(name)+'</option>').join('');if([...users.keys()].includes(current))$('fleetUser').value=current}
 function filteredFleetCars(){const q=$('fleetSearch').value.trim().toLocaleUpperCase('cs-CZ'),s=$('fleetSeason').value,u=$('fleetUser').value,from=$('fleetFrom').value?new Date($('fleetFrom').value+'T00:00:00').getTime():-Infinity,to=$('fleetTo').value?new Date($('fleetTo').value+'T23:59:59.999').getTime():Infinity,recordFilterActive=!!(s||u||$('fleetFrom').value||$('fleetTo').value);return D.cars.filter(c=>{const hay=(String(c.plate||'')+' '+String(c.name||'')).toLocaleUpperCase('cs-CZ');if(q&&!hay.includes(q))return false;if(!recordFilterActive)return true;return D.records.some(r=>{const ts=new Date(r.createdAt).getTime();return r.carId===c.id&&(!s||r.season===s)&&(!u||r.userId===u)&&ts>=from&&ts<=to})})}
 function renderFleet(){renderFleetUsers();const cars=filteredFleetCars();let done=0,part=0,h='';for(const c of cars){const s=latest(c.id,'summer'),w=latest(c.id,'winter'),l=latest(c.id);if(s&&w)done++;else if(s||w)part++;h+='<div class="item"><b>'+e(c.plate)+'</b> '+e(c.name)+'<div class="small">'+(l?Number(l.mileage).toLocaleString('cs-CZ')+' km':'bez km')+'</div><span class="chip '+(s?'good':'')+'">☀️ '+(s?e(dotLabel(s)):'chybí')+'</span><span class="chip '+(w?'good':'')+'">❄️ '+(w?e(dotLabel(w)):'chybí')+'</span>'+(can('vehicleDetail')?'<div class="toolbar" style="margin-top:7px"><button class="fleet-detail secondary" data-id="'+e(c.id)+'">Detail vozidla</button></div>':'')+'</div>'}$('fleetList').innerHTML=h||'<div class="small">Filtru neodpovídá žádné auto.</div>';$('stats').textContent='Celkem '+cars.length+' · Hotovo '+done+' · Rozpracováno '+part;$('fleetCount').textContent='Zobrazeno '+cars.length+' z '+D.cars.length+' aut';$('fleetExportCsv').disabled=cars.length===0||!can('fleetExport');$('fleetExportCsv').style.display=can('fleetExport')?'':'none';document.querySelectorAll('.fleet-detail').forEach(b=>b.onclick=()=>openVehicle(b.dataset.id))}
@@ -410,7 +536,7 @@ function openModule(id){
   document.querySelectorAll('.module-screen').forEach(x=>x.classList.toggle('active',x.id===currentModule));
   if(currentModule==='pneu'){
     const active=document.querySelector('#pneu .panel.active')?.id;
-    if(!active||!allowedTab(active)){const first=['entry','fleet','history'].find(allowedTab);if(first)showTab(first,false)}
+    if(!active||!allowedTab(active)){const first=['entry','season','fleet','history'].find(allowedTab);if(first)showTab(first,false)}
   }
   if(currentModule==='admin'&&me?.role==='admin')refresh();
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
@@ -1073,7 +1199,7 @@ $('importCars').onclick=async()=>{const file=$('csvImport').files?.[0];if(!file)
 $('backupJson').onclick=async()=>{try{const data=await api('adminBackup');downloadBlob(JSON.stringify(data,null,2),'application/json;charset=utf-8','DOT-Evidence-Backup-'+new Date().toISOString().slice(0,10)+'.json')}catch(x){alert(errorText(x))}};
 
 function renderAdmin(){renderAdminDashboard();renderModuleControls();renderAdminCars();renderAdminUsers();renderNotificationAdmin();renderTransportAdmin();renderAudit()}
-function allowedTab(id){return id==='entry'?can('dotCreate'):id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):false}
+function allowedTab(id){return id==='entry'?can('dotCreate'):id==='season'?hasPneuAccess():id==='fleet'?(can('fleetView')||can('attentionView')):id==='history'?can('historyView'):false}
 function applyAccess(){
   $('who').textContent=me.name+' · '+roleLabel(me.role);
   document.querySelectorAll('.pneu-tabs button').forEach(b=>b.style.display=allowedTab(b.dataset.tab)?'':'none');
@@ -1086,9 +1212,9 @@ function applyAccess(){
   if(MODULE_KEYS.includes(currentModule)&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
   else if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).visible===false)openModule('home');
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
-function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
+function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='season')renderSeasonDashboard();if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
   const modules={};
   MODULE_KEYS.forEach(id=>{
@@ -1177,6 +1303,12 @@ if($('sendAdminNotice'))$('sendAdminNotice').onclick=async()=>{
 };
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+if($('seasonCampaign'))$('seasonCampaign').onchange=()=>{seasonDashboardCampaign=$('seasonCampaign').value;renderSeasonDashboard()};
+if($('seasonCategory'))$('seasonCategory').onchange=renderSeasonDashboard;
+if($('seasonStatus'))$('seasonStatus').onchange=renderSeasonDashboard;
+if($('seasonSearch'))$('seasonSearch').oninput=renderSeasonDashboard;
+if($('seasonClearFilters'))$('seasonClearFilters').onclick=()=>{$('seasonSearch').value='';$('seasonCategory').value='';$('seasonStatus').value='';renderSeasonDashboard()};
+if($('seasonRefresh'))$('seasonRefresh').onclick=refresh;
 if($('addTireTaskRow'))$('addTireTaskRow').onclick=()=>{collectTireTaskDraftRows();if(tireTaskDraftRows.length>=6)return;tireTaskDraftRows.push(newTireTaskDraftRow());renderTireTaskDraft()};
 if($('createTireTask'))$('createTireTask').onclick=async()=>{
   const date=$('tireTaskDate').value,rows=collectTireTaskDraftRows();
