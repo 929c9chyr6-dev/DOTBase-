@@ -295,7 +295,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 15;
+  cfg.version = 16;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -311,6 +311,7 @@ function normalizeConfig(cfg) {
     u.role = normalizeRole(u.role);
     u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
     u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
+    u.pinChangeRequired = normalizePinChangeRequired(u.pinChangeRequired);
     if (u.role !== 'admin') {
       u.permissions ||= {};
       if (previousVersion < 11 && u.role === 'dispatch') {
@@ -654,7 +655,8 @@ function userStats(cfg, recs, pushes, presence) {
     const p = presenceFor(u.id, presence);
     return {
       id: u.id, name: u.name, role: u.role, active: u.active, createdAt: u.createdAt || null,
-      lastLoginAt: u.lastLoginAt || null, recordCount: own.length, lastRecordAt: own[0]?.createdAt || null,
+      lastLoginAt: u.lastLoginAt || null, pinChangeRequired: normalizePinChangeRequired(u.pinChangeRequired),
+      recordCount: own.length, lastRecordAt: own[0]?.createdAt || null,
       pushDevices: pushes.filter((x) => x.userId === u.id).length,
       permissions: effectivePermissions(u),
       presenceStatus: p.status, lastOnlineAt: p.lastOnlineAt, lastActivityAt: p.lastActivityAt,
@@ -748,17 +750,15 @@ function recordPath({ ts, id, carId, season, dot, mileage, userId, dotFront='', 
   if(dotFront&&dotRear)parts.push(dotFront,dotRear);
   return `records/${parts.join('_')}.rec`;
 }
-function randomFreePin(cfg, excludeId = null) {
-  const used = new Set(cfg.users.filter((u) => u.active && u.id !== excludeId).map((u) => u.pinHash));
-  for(let i=0;i<250;i++){
-    const p=String(crypto.randomInt(10000)).padStart(4,'0');
-    if(!used.has(pinHash(p)))return p;
-  }
-  for(let n=0;n<=9999;n++){
-    const p=String(n).padStart(4,'0');
-    if(!used.has(pinHash(p)))return p;
-  }
-  return null;
+function normalizePinChangeRequired(raw){
+  if(!raw||raw.required!==true)return null;
+  return {
+    required:true,
+    requireOldPin:raw.requireOldPin!==false,
+    requestedAt:raw.requestedAt||null,
+    requestedBy:raw.requestedBy||null,
+    requestedById:raw.requestedById||null,
+  };
 }
 
 function normalizedTrafficText(v) {
@@ -974,7 +974,7 @@ export default async function handler(req, res) {
       u.lastLoginAt = new Date().toISOString();
       await writeConfig(cfg);
       const token = sign({ uid: u.id, role: u.role, exp: Date.now() + 12 * 60 * 60 * 1000 });
-      return json(res, 200, { token, user: { id: u.id, name: u.name, role: u.role } });
+      return json(res, 200, { token, user: { id: u.id, name: u.name, role: u.role }, pinChangeRequired: normalizePinChangeRequired(u.pinChangeRequired) });
     }
 
     const session = auth(req);
@@ -982,6 +982,27 @@ export default async function handler(req, res) {
     const cfg = await readConfig();
     const currentUser = cfg.users.find((x) => x.id === session.uid && x.active);
     if (!currentUser) return json(res, 401, { error: 'AUTH' });
+
+    const pinReset=normalizePinChangeRequired(currentUser.pinChangeRequired);
+    if(pinReset&&body.action!=='changeOwnPin'){
+      return json(res,423,{error:'PIN_CHANGE_REQUIRED',message:'Než bude možné pokračovat, je nutné nastavit nový PIN.',requireOldPin:pinReset.requireOldPin});
+    }
+    if(body.action==='changeOwnPin'){
+      if(!pinReset)return json(res,409,{error:'PIN_CHANGE_NOT_REQUIRED',message:'Pro tento účet není změna PINu vyžádána.'});
+      const oldPin=String(body.oldPin||''),newPin=String(body.newPin||''),confirmPin=String(body.confirmPin||'');
+      if(pinReset.requireOldPin&&(!/^\d{4}$/.test(oldPin)||!safeEqualHex(currentUser.pinHash,pinHash(oldPin))))return json(res,400,{error:'PIN_OLD',message:'Stávající PIN není správný.'});
+      if(!/^\d{4}$/.test(newPin))return json(res,400,{error:'PIN',message:'Nový PIN musí mít 4 číslice.'});
+      if(newPin!==confirmPin)return json(res,400,{error:'PIN_MATCH',message:'Nové PINy se neshodují.'});
+      const newHash=pinHash(newPin);
+      if(safeEqualHex(currentUser.pinHash,newHash))return json(res,400,{error:'PIN_SAME',message:'Nový PIN musí být jiný než stávající PIN.'});
+      if(cfg.users.some((u)=>u.id!==currentUser.id&&u.active&&safeEqualHex(u.pinHash,newHash)))return json(res,409,{error:'PIN_USED'});
+      const resetBefore={...pinReset};
+      currentUser.pinHash=newHash;
+      currentUser.pinChangeRequired=null;
+      await writeConfig(cfg);
+      await appendAudit(currentUser,'user_pin_self_change','Uživatel si změnil PIN po výzvě administrátora',{userId:currentUser.id,resetRequest:resetBefore});
+      return json(res,200,{ok:true});
+    }
 
     const sys = systemState(cfg);
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
@@ -1677,13 +1698,7 @@ export default async function handler(req, res) {
       const before = { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) };
       const name = cleanText(body.name, 40);
       if (name) target.name = name;
-      if (body.pin !== undefined && body.pin !== '') {
-        const p = String(body.pin);
-        if (!/^\d{4}$/.test(p)) return json(res, 400, { error: 'PIN' });
-        const h = pinHash(p);
-        if (cfg.users.some((x) => x.id !== target.id && x.active && safeEqualHex(x.pinHash, h))) return json(res, 409, { error: 'PIN_USED' });
-        target.pinHash = h;
-      }
+      if (body.pin !== undefined && body.pin !== '') return json(res,400,{error:'PIN_SELF_SERVICE',message:'PIN uživatele mění pouze uživatel přes výzvu ke změně PINu.'});
       if (target.role !== 'admin') {
         if (NON_ADMIN_ROLES.includes(body.role)) target.role = body.role;
         if (body.permissions && typeof body.permissions === 'object') {
@@ -1693,19 +1708,25 @@ export default async function handler(req, res) {
         if (typeof body.active === 'boolean') target.active = body.active;
       }
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) }, pinChanged: body.pin !== undefined && body.pin !== '' });
+      await appendAudit(currentUser, 'user_edit', `Upraven uživatel ${target.name}`, { userId: target.id, before, after: { name: target.name, active: target.active, role: target.role, permissions: effectivePermissions(target) } });
       return json(res, 200, { ok: true });
     }
 
-    if (body.action === 'adminGeneratePin') {
-      const target = cfg.users.find((x) => x.id === body.userId);
-      if (!target) return json(res, 404, { error: 'USER' });
-      const pin = randomFreePin(cfg, target.id);
-      if (!pin) return json(res, 409, { error: 'NO_PIN' });
-      target.pinHash = pinHash(pin);
+    if (body.action === 'adminRequestPinReset') {
+      const target=cfg.users.find((x)=>x.id===body.userId);
+      if(!target)return json(res,404,{error:'USER'});
+      if(target.role==='admin')return json(res,403,{error:'ADMIN_PIN_RESET',message:'Povinnou změnu PINu nelze tímto způsobem nastavit Admin účtu.'});
+      if(target.active===false)return json(res,409,{error:'USER_BLOCKED',message:'Nejdřív účet aktivuj, aby se uživatel mohl přihlásit a změnu dokončit.'});
+      const requireOldPin=body.requireOldPin!==false,now=new Date().toISOString();
+      target.pinChangeRequired={required:true,requireOldPin,requestedAt:now,requestedBy:currentUser.name,requestedById:currentUser.id};
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'user_pin_reset', `Vygenerován nový PIN pro ${target.name}`, { userId: target.id });
-      return json(res, 200, { ok: true, pin });
+      const push=await sendPushToUsers(cfg,[target.id],{title:'🔐 Nutná změna PINu',body:'Při příštím přihlášení bude nutné nastavit nový PIN.',tag:'pin-reset-'+target.id,url:'/'});
+      await appendAudit(currentUser,'user_pin_reset_request',`Vyžádána změna PINu pro ${target.name}`,{userId:target.id,requireOldPin,...push});
+      return json(res,200,{ok:true,requireOldPin,...push});
+    }
+
+    if (body.action === 'adminGeneratePin') {
+      return json(res,410,{error:'PIN_SELF_SERVICE',message:'Generování PINu administrátorem bylo nahrazeno výzvou k vlastní změně PINu.'});
     }
 
     if (body.action === 'adminSaveNotificationSettings') {

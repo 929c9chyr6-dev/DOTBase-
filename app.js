@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -40,19 +40,20 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
-  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
-  $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
+  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
+  $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
   if(message)note($('loginMsg'),message,cls);$('pin').focus();
 }
 async function login(){
   const p=$('pin').value.replace(/\D/g,'').slice(0,4);$('pin').value=p;
   if(p.length!==4)return note($('loginMsg'),'Kód má 4 číslice.','msg err');
   try{
-    const r=await api('login',{pin:p});tok=r.token;me=r.user;lastInteraction=Date.now();$('login').hidden=true;$('main').hidden=false;
-    $('pin').value='';
+    const r=await api('login',{pin:p});tok=r.token;me=r.user;lastInteraction=Date.now();$('login').hidden=true;$('pin').value='';
+    if(r.pinChangeRequired?.required){showPinChangeScreen(r.pinChangeRequired);return}
+    $('main').hidden=false;
     await refresh();await heartbeat();await updatePushStatus();loadTrafficReport(false).catch(()=>{});
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
@@ -65,6 +66,31 @@ async function login(){
     note($('loginMsg'),msg,x.code==='MAINTENANCE'?'msg warn':'msg err');
   }
 }
+function showPinChangeScreen(reset){
+  pinChangeState=reset||{required:true,requireOldPin:true};
+  $('main').hidden=true;$('login').hidden=true;$('pinChangeScreen').hidden=false;$('pinChangeMsg').innerHTML='';
+  $('pinChangeOldWrap').hidden=!pinChangeState.requireOldPin;
+  $('pinChangeOld').value=$('pinChangeNew').value=$('pinChangeConfirm').value='';
+  $('pinChangeRequirement').textContent=pinChangeState.requireOldPin?'Zadej svůj stávající PIN a potom dvakrát nový PIN.':'Admin nevyžaduje opětovné zadání stávajícího PINu. Zadej dvakrát nový PIN.';
+  setTimeout(()=>$(pinChangeState.requireOldPin?'pinChangeOld':'pinChangeNew').focus(),50);
+}
+async function submitOwnPinChange(){
+  const oldPin=$('pinChangeOld').value.replace(/\D/g,'').slice(0,4),newPin=$('pinChangeNew').value.replace(/\D/g,'').slice(0,4),confirmPin=$('pinChangeConfirm').value.replace(/\D/g,'').slice(0,4);
+  $('pinChangeOld').value=oldPin;$('pinChangeNew').value=newPin;$('pinChangeConfirm').value=confirmPin;
+  if(pinChangeState?.requireOldPin&&oldPin.length!==4)return note($('pinChangeMsg'),'Zadej stávající čtyřmístný PIN.','msg err');
+  if(newPin.length!==4)return note($('pinChangeMsg'),'Nový PIN musí mít 4 číslice.','msg err');
+  if(newPin!==confirmPin)return note($('pinChangeMsg'),'Nové PINy se neshodují.','msg err');
+  $('pinChangeSubmit').disabled=true;
+  try{
+    await api('changeOwnPin',{oldPin,newPin,confirmPin});
+    pinChangeState=null;$('pinChangeScreen').hidden=true;$('main').hidden=false;
+    await refresh();await heartbeat();await updatePushStatus();openModule('home');
+  }catch(x){note($('pinChangeMsg'),errorText(x),'msg err')}
+  finally{$('pinChangeSubmit').disabled=false}
+}
+$('pinChangeSubmit').onclick=submitOwnPinChange;
+$('pinChangeLogout').onclick=()=>lockApp();
+$('pinChangeConfirm').onkeydown=x=>{if(x.key==='Enter')submitOwnPinChange()};
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
 $('lock').onclick=()=>lockApp();
 async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn')}}
@@ -976,19 +1002,40 @@ function renderAdminUsers(){
     const role=admin?'<span class="badge">Admin</span>':'<select class="ur" data-id="'+e(u.id)+'" style="max-width:160px"><option value="driver" '+(u.role==='driver'?'selected':'')+'>Driver</option><option value="dispatch" '+(u.role==='dispatch'?'selected':'')+'>Dispatch</option><option value="technician" '+(u.role==='technician'?'selected':'')+'>Technician</option><option value="test" '+(u.role==='test'?'selected':'')+'>TEST</option></select>';
     const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Práva nastav níže a přístup k jednotlivým modulům v Admin → Moduly.</div></div>':'';
     const perms=admin?'<div class="small" style="margin:9px 0"><b>Plný systémový přístup.</b> Tato práva nelze vypnout.</div>':'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'"><input class="up" data-id="'+e(u.id)+'" inputmode="numeric" maxlength="4" placeholder="nový PIN" style="max-width:150px">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button><button class="genpin secondary" data-id="'+e(u.id)+'">🎲 Nový PIN</button>'+(!admin?'<button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+pinReset+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
-    const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,p=document.querySelector('.up[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
-    if(p&&!/^\d{4}$/.test(p))return alert('PIN musí mít 4 číslice.');
+    const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
     const role=u?.role==='admin'?'admin':document.querySelector('.ur[data-id="'+id+'"]').value;
     const permissions={};if(role!=='admin')document.querySelectorAll('.uperm[data-id="'+id+'"]').forEach(x=>permissions[x.dataset.k]=x.checked);
-    try{await api('adminUpdateUser',{userId:id,name:n,pin:p,role,permissions});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
+    try{await api('adminUpdateUser',{userId:id,name:n,role,permissions});await refresh();alert('Uloženo.')}catch(x){alert(errorText(x))}
   });
-  document.querySelectorAll('.genpin').forEach(b=>b.onclick=async()=>{if(!confirm('Vygenerovat nový PIN? Starý okamžitě přestane fungovat.'))return;try{const r=await api('adminGeneratePin',{userId:b.dataset.id});alert('NOVÝ PIN: '+r.pin+'\n\nUlož si ho nebo ho předej uživateli. Po zavření tohoto okna už ho aplikace znovu nezobrazí.');await refresh()}catch(x){alert(errorText(x))}});
+  document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
 }
 
+function openAdminPinReset(id){
+  const u=(D.users||[]).find(x=>x.id===id);if(!u)return;
+  pinResetAdminUserId=id;$('pinAdminResetUser').textContent=u.name;
+  $('pinAdminRequireOld').value=u.pinChangeRequired?.required&&u.pinChangeRequired.requireOldPin===false?'no':'yes';
+  $('pinAdminResetMsg').innerHTML='';$('pinAdminResetOverlay').hidden=false;
+}
+function closeAdminPinReset(){pinResetAdminUserId=null;$('pinAdminResetOverlay').hidden=true;$('pinAdminResetMsg').innerHTML=''}
+$('pinAdminResetCancel').onclick=closeAdminPinReset;
+$('pinAdminResetSubmit').onclick=async()=>{
+  if(!pinResetAdminUserId)return;
+  const u=(D.users||[]).find(x=>x.id===pinResetAdminUserId);if(!u)return closeAdminPinReset();
+  const requireOldPin=$('pinAdminRequireOld').value==='yes';
+  if(!confirm('Pozastavit běžný přístup účtu '+u.name+' a vyžádat změnu PINu při příštím přihlášení?'))return;
+  $('pinAdminResetSubmit').disabled=true;
+  try{
+    const r=await api('adminRequestPinReset',{userId:u.id,requireOldPin});
+    closeAdminPinReset();await refresh();
+    alert('Výzva ke změně PINu byla nastavena.'+(r.devices?' Push odeslán na '+r.sent+'/'+r.devices+' zařízení.':''));
+  }catch(x){note($('pinAdminResetMsg'),errorText(x),'msg err')}
+  finally{$('pinAdminResetSubmit').disabled=false}
+};
 // Notifications admin
 function renderNotificationAdmin(){
   const s=D.notificationSettings||{};$('autoIncomplete').checked=!!s.incompleteEnabled;$('autoIncompleteDays').value=String(s.incompleteRepeatDays||3);$('autoIncompleteRecipients').value=s.incompleteRecipients||'workers';$('autoSummer').checked=s.incompleteMissingSummer!==false;$('autoWinter').checked=s.incompleteMissingWinter!==false;$('autoAnomaly').checked=!!s.adminAnomalyEnabled;$('autoAdminDays').value=String(s.adminAnomalyRepeatDays||3);$('autoStale').checked=!!s.staleEnabled;$('autoStaleDays').value=String(s.staleDays||365);
