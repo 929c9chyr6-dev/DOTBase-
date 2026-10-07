@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='';
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -52,7 +52,7 @@ function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICAT
 function lockApp(message='',cls='msg'){
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
   if(lastUserId)localStorage.setItem('lastLoginUserId',lastUserId);
-  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
+  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;lastSyncVersion='';syncInFlight=false;adminStateLoadedAt=0;dataLoadedAt={};historyNextOffset=null;historyTotal=0;historyLoading=false;fleetDataKey='';if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
   if(message)note($('loginMsg'),message,cls);loadLoginUsers().finally(()=>$('pin').focus());
 }
@@ -147,8 +147,8 @@ $('lock').onclick=()=>lockApp();
 async function refresh(){
   try{
     const fresh=await api('state');
-    D=fresh;if(D.me)me=D.me;lastSyncVersion=D.syncVersion||lastSyncVersion;render();
-    if(currentModule==='admin'&&me?.role==='admin')await loadAdminState(true);
+    D={...D,...fresh};if(D.me)me=D.me;lastSyncVersion=D.syncVersion||lastSyncVersion;render();
+    await loadCurrentModuleData(true);
   }
   catch(x){
     if(x.code==='AUTH')lockApp();
@@ -172,6 +172,52 @@ async function loadAdminState(force=false){
   if(me?.role!=='admin')return;
   if(!force&&D.adminLoaded&&Date.now()-adminStateLoadedAt<30000){renderAdmin();return}
   const r=await api('adminState');Object.assign(D,r);D.adminLoaded=true;adminStateLoadedAt=Date.now();renderAdmin();
+}
+function dataFresh(key,maxAge=20000){return !!dataLoadedAt[key]&&Date.now()-dataLoadedAt[key]<maxAge}
+async function loadVehicleOverviewData(force=false){
+  if(!force&&dataFresh('vehicleOverview'))return;
+  const r=await api('vehicleOverviewData');Object.assign(D,r);dataLoadedAt.vehicleOverview=Date.now();renderVehicleOverview();
+}
+async function loadPneuData(force=false){
+  if(!force&&dataFresh('pneu'))return;
+  const r=await api('pneuData');Object.assign(D,r);dataLoadedAt.pneu=Date.now();
+  renderCarOptions($('car')?.value||'');renderSeasonDashboard();if(me?.role!=='admin')renderAttention();
+}
+function fleetFilters(){return {season:$('fleetSeason')?.value||'',userId:$('fleetUser')?.value||'',from:$('fleetFrom')?.value||'',to:$('fleetTo')?.value||''}}
+async function loadFleetData(force=false){
+  const filters=fleetFilters(),key=JSON.stringify(filters);
+  if(!force&&fleetDataKey===key&&dataFresh('fleet'))return;
+  const r=await api('fleetData',filters);D.fleetRows=r.rows||[];D.fleetUsers=r.users||[];D.fleetTotalActive=Number(r.totalActive)||0;fleetDataKey=key;dataLoadedAt.fleet=Date.now();renderFleet();
+}
+async function loadTaskData(force=false){
+  if(!force&&dataFresh('tiretask'))return;
+  const r=await api('taskData');Object.assign(D,r);dataLoadedAt.tiretask=Date.now();renderTireTask();renderHomePulse();
+}
+async function loadNotificationData(force=false){
+  if(!force&&dataFresh('notifications'))return;
+  const r=await api('notificationData');Object.assign(D,r);dataLoadedAt.notifications=Date.now();renderNotifications();renderNotificationSettings();
+}
+function historyFilters(){return {season:$('histSeason')?.value||'',userId:$('histUser')?.value||'',from:$('histFrom')?.value||'',to:$('histTo')?.value||''}}
+async function loadHistoryPage(reset=true,focusRecordId=''){
+  if(historyLoading)return;historyLoading=true;
+  try{
+    const offset=reset?0:(historyNextOffset||0),r=await api('historyPage',{...historyFilters(),offset,limit:100,focusRecordId});
+    D.historyRecords=reset?(r.records||[]):[...(D.historyRecords||[]),...(r.records||[]).filter(x=>!(D.historyRecords||[]).some(y=>y.id===x.id))];
+    D.recordUsers=r.users||D.recordUsers||[];historyTotal=Number(r.total)||0;historyNextOffset=r.nextOffset;renderHist();
+  }finally{historyLoading=false}
+}
+async function loadCurrentModuleData(force=false){
+  try{
+    if(currentModule==='vehicleOverview')await loadVehicleOverviewData(force);
+    else if(currentModule==='pneu'){
+      await loadPneuData(force);
+      const tab=document.querySelector('#pneu .panel.active')?.id;
+      if(tab==='fleet'&&can('fleetView'))await loadFleetData(force);
+      if(tab==='history'&&can('historyView'))await loadHistoryPage(true,globalFocusRecordId||'');
+    }else if(currentModule==='tiretask')await loadTaskData(force);
+    else if(currentModule==='notifications')await loadNotificationData(force);
+    else if(currentModule==='admin'&&me?.role==='admin')await loadAdminState(force);
+  }catch(x){if(x.code==='AUTH')lockApp();else console.error(x)}
 }
 function latest(id,s){return (D.records||[]).find(r=>r.carId===id&&(!s||r.season===s))}
 function dotLabel(r){return r?.dotFront&&r?.dotRear?'PŘ '+r.dotFront+' / Z '+r.dotRear:(r?.dot||'—')}
@@ -431,12 +477,11 @@ function seasonCampaignOptions(){
   const currentYear=Number(localDateISO().slice(0,4)),keys=new Set();
   for(let y=currentYear-3;y<=currentYear+1;y++){keys.add('summer:'+y);keys.add('winter:'+y)}
   (D.seasonRecords||[]).forEach(r=>keys.add(r.season+':'+r.campaignYear));
-  (D.vehicleOverview||[]).forEach(v=>(v.activeTasks||[]).forEach(t=>{const k=seasonCampaignKey(t.targetSeason,t.date);if(k)keys.add(k)}));
+  (D.pneuTasks||[]).forEach(t=>{const k=seasonCampaignKey(t.targetSeason,t.date);if(k)keys.add(k)});
   return [...keys].sort((a,b)=>seasonCampaignSortValue(b)-seasonCampaignSortValue(a));
 }
 function seasonTaskForCar(carId,seasonValue,campaignYear){
-  const v=(D.vehicleOverview||[]).find(x=>x.id===carId);
-  return (v?.activeTasks||[]).filter(t=>t.targetSeason===seasonValue&&seasonCampaignKey(t.targetSeason,t.date)===seasonValue+':'+campaignYear)
+  return (D.pneuTasks||[]).filter(t=>t.carId===carId&&t.targetSeason===seasonValue&&seasonCampaignKey(t.targetSeason,t.date)===seasonValue+':'+campaignYear)
     .sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')))[0]||null;
 }
 function seasonRowForCar(car,key){
@@ -472,7 +517,7 @@ function planSeasonVehicle(carId,seasonValue){
   window.scrollTo({top:0,behavior:'smooth'});
 }
 function openSeasonPneuEntry(carId,seasonValue,taskId=''){
-  const linked=(D.tireTasks||[]).find(t=>t.id===taskId);
+  const linked=(D.tireTasks||D.pneuTasks||[]).find(t=>t.id===taskId);
   if(linked)return openPneuFromTireTask(linked.id);
   pendingTireTaskId=null;openModule('pneu');showTab('entry',false);
   carSearch='';$('carSearch').value='';if($('carCategory'))$('carCategory').value='';
@@ -535,34 +580,61 @@ function renderSeasonDashboard(){
   document.querySelectorAll('.season-plan').forEach(b=>b.onclick=()=>planSeasonVehicle(b.dataset.car,b.dataset.season));
   document.querySelectorAll('.season-dot').forEach(b=>b.onclick=()=>openSeasonPneuEntry(b.dataset.car,b.dataset.season,b.dataset.task));
 }
-function renderFleetUsers(){const current=$('fleetUser').value,users=new Map();D.records.forEach(r=>users.set(r.userId,r.userName));$('fleetUser').innerHTML='<option value="">Všichni uživatelé</option>'+[...users.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),'cs')).map(([id,name])=>'<option value="'+e(id)+'">'+e(name)+'</option>').join('');if([...users.keys()].includes(current))$('fleetUser').value=current}
-function filteredFleetCars(){const q=$('fleetSearch').value.trim().toLocaleUpperCase('cs-CZ'),s=$('fleetSeason').value,u=$('fleetUser').value,from=$('fleetFrom').value?new Date($('fleetFrom').value+'T00:00:00').getTime():-Infinity,to=$('fleetTo').value?new Date($('fleetTo').value+'T23:59:59.999').getTime():Infinity,recordFilterActive=!!(s||u||$('fleetFrom').value||$('fleetTo').value);return D.cars.filter(c=>{const hay=(String(c.plate||'')+' '+String(c.name||'')).toLocaleUpperCase('cs-CZ');if(q&&!hay.includes(q))return false;if(!recordFilterActive)return true;return D.records.some(r=>{const ts=new Date(r.createdAt).getTime();return r.carId===c.id&&(!s||r.season===s)&&(!u||r.userId===u)&&ts>=from&&ts<=to})})}
-function renderFleet(){renderFleetUsers();const cars=filteredFleetCars();let done=0,part=0,h='';for(const c of cars){const s=latest(c.id,'summer'),w=latest(c.id,'winter'),l=latest(c.id);if(s&&w)done++;else if(s||w)part++;h+='<div class="item"><b>'+e(c.plate)+'</b> '+e(c.name)+'<div class="small">'+(l?Number(l.mileage).toLocaleString('cs-CZ')+' km':'bez km')+'</div><span class="chip '+(s?'good':'')+'">☀️ '+(s?e(dotLabel(s)):'chybí')+'</span><span class="chip '+(w?'good':'')+'">❄️ '+(w?e(dotLabel(w)):'chybí')+'</span>'+(can('vehicleDetail')?'<div class="toolbar" style="margin-top:7px"><button class="fleet-detail secondary" data-id="'+e(c.id)+'">Detail vozidla</button></div>':'')+'</div>'}$('fleetList').innerHTML=h||'<div class="small">Filtru neodpovídá žádné auto.</div>';$('stats').textContent='Celkem '+cars.length+' · Hotovo '+done+' · Rozpracováno '+part;$('fleetCount').textContent='Zobrazeno '+cars.length+' z '+D.cars.length+' aut';$('fleetExportCsv').disabled=cars.length===0||!can('fleetExport');$('fleetExportCsv').style.display=can('fleetExport')?'':'none';document.querySelectorAll('.fleet-detail').forEach(b=>b.onclick=()=>openVehicle(b.dataset.id))}
-['fleetSearch','fleetFrom','fleetTo'].forEach(id=>$(id).oninput=renderFleet);['fleetSeason','fleetUser'].forEach(id=>$(id).onchange=renderFleet);
-$('clearFleetFilters').onclick=()=>{$('fleetSearch').value='';$('fleetSeason').value='';$('fleetUser').value='';$('fleetFrom').value='';$('fleetTo').value='';renderFleet()};$('fleetRefresh').onclick=refresh;
-$('fleetExportCsv').onclick=()=>{const cars=filteredFleetCars();if(!cars.length)return alert('Filtru neodpovídá žádné auto.');const rows=[['SPZ','Vozidlo','Letní DOT','Zimní DOT','Kilometry'],...cars.map(c=>{const s=latest(c.id,'summer'),w=latest(c.id,'winter'),l=latest(c.id);return[c.plate,c.name,s?dotLabel(s):'',w?dotLabel(w):'',l?l.mileage:'']})];downloadBlob('\uFEFF'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','DOT-Auta-'+new Date().toISOString().slice(0,10)+'.csv')};
+function renderFleetUsers(){
+  const current=$('fleetUser').value,users=D.fleetUsers||[];
+  $('fleetUser').innerHTML='<option value="">Všichni uživatelé</option>'+users.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'cs')).map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+'</option>').join('');
+  if(users.some(u=>u.id===current))$('fleetUser').value=current;
+}
+function filteredFleetCars(){return D.fleetRows||[]}
+function renderFleet(){
+  renderFleetUsers();const cars=filteredFleetCars();let done=0,part=0,h='';
+  for(const c of cars){
+    const s=c.summer,w=c.winter;if(s&&w)done++;else if(s||w)part++;
+    h+='<div class="item"><b>'+e(c.plate)+'</b> '+e(c.name)+'<div class="small">'+(c.latestMileage===null||c.latestMileage===undefined?'bez km':Number(c.latestMileage).toLocaleString('cs-CZ')+' km')+'</div><span class="chip '+(s?'good':'')+'">☀️ '+(s?e(dotLabel(s)):'chybí')+'</span><span class="chip '+(w?'good':'')+'">❄️ '+(w?e(dotLabel(w)):'chybí')+'</span>'+(can('vehicleDetail')?'<div class="toolbar" style="margin-top:7px"><button class="fleet-detail secondary" data-id="'+e(c.id)+'">Detail vozidla</button></div>':'')+'</div>';
+  }
+  $('fleetList').innerHTML=h||'<div class="small">'+(dataLoadedAt.fleet?'Filtru neodpovídá žádné auto.':'Data se načtou při otevření přehledu.')+'</div>';
+  $('stats').textContent='Celkem '+cars.length+' · Hotovo '+done+' · Rozpracováno '+part;
+  $('fleetCount').textContent='Zobrazeno '+cars.length+' z '+Number(D.fleetTotalActive??D.cars.length)+' aut';
+  $('fleetExportCsv').disabled=cars.length===0||!can('fleetExport');$('fleetExportCsv').style.display=can('fleetExport')?'':'none';
+  document.querySelectorAll('.fleet-detail').forEach(b=>b.onclick=()=>openVehicle(b.dataset.id));
+}
+['fleetFrom','fleetTo'].forEach(id=>$(id).oninput=()=>loadFleetData(true));
+['fleetSeason','fleetUser'].forEach(id=>$(id).onchange=()=>loadFleetData(true));
+$('clearFleetFilters').onclick=()=>{$('fleetSearch').value='';$('fleetSeason').value='';$('fleetUser').value='';$('fleetFrom').value='';$('fleetTo').value='';loadFleetData(true)};
+$('fleetRefresh').onclick=()=>loadFleetData(true);
+$('fleetExportCsv').onclick=()=>{const cars=filteredFleetCars();if(!cars.length)return alert('Filtru neodpovídá žádné auto.');const rows=[['SPZ','Vozidlo','Letní DOT','Zimní DOT','Kilometry'],...cars.map(c=>[c.plate,c.name,c.summer?dotLabel(c.summer):'',c.winter?dotLabel(c.winter):'',c.latestMileage??''])];downloadBlob('\uFEFF'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','DOT-Auta-'+new Date().toISOString().slice(0,10)+'.csv')};
 
 // History filters/edit/export
-function renderHistoryUsers(){const current=$('histUser').value,users=new Map();D.records.forEach(r=>users.set(r.userId,r.userName));$('histUser').innerHTML='<option value="">Všichni uživatelé</option>'+[...users.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1]),'cs')).map(([id,name])=>'<option value="'+e(id)+'">'+e(name)+'</option>').join('');if([...users.keys()].includes(current))$('histUser').value=current}
-function filteredRecords(){const q=$('histSearch').value.trim().toLocaleUpperCase('cs-CZ'),s=$('histSeason').value,u=$('histUser').value,from=$('histFrom').value?new Date($('histFrom').value+'T00:00:00').getTime():-Infinity,to=$('histTo').value?new Date($('histTo').value+'T23:59:59.999').getTime():Infinity;return D.records.filter(r=>{const ts=new Date(r.createdAt).getTime(),hay=(String(r.plate||'')+' '+String(r.vehicle||'')).toLocaleUpperCase('cs-CZ');return(!q||hay.includes(q))&&(!s||r.season===s)&&(!u||r.userId===u)&&ts>=from&&ts<=to})}
+function renderHistoryUsers(){
+  const current=$('histUser').value,users=D.recordUsers||[];
+  $('histUser').innerHTML='<option value="">Všichni uživatelé</option>'+users.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'cs')).map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+'</option>').join('');
+  if(users.some(u=>u.id===current))$('histUser').value=current;
+}
+function filteredRecords(){return D.historyRecords||[]}
 async function editRecord(path){
-  const r=D.records.find(x=>x.path===path);if(!r)return;
+  const r=(D.historyRecords||D.records||[]).find(x=>x.path===path);if(!r)return;
   const plate=prompt('SPZ vozidla:',r.plate);if(plate===null)return;const car=(D.allCars||D.cars).find(c=>c.plate.toUpperCase()===plate.trim().replace(/\s+/g,'').toUpperCase());if(!car)return alert('Auto s touto SPZ nebylo nalezeno.');
   const sx=prompt('Sada: L = letní, Z = zimní',r.season==='summer'?'L':'Z');if(sx===null)return;const ns=/^z/i.test(sx)?'winter':/^l/i.test(sx)?'summer':null;if(!ns)return alert('Zadej L nebo Z.');
   const payload={path:r.path,carId:car.id,season:ns};
-  if(r.dotFront&&r.dotRear){
-    const front=prompt('Přední DOT (4 číslice):',r.dotFront);if(front===null)return;
-    const rear=prompt('Zadní DOT (4 číslice):',r.dotRear);if(rear===null)return;
-    payload.splitDot=true;payload.dotFront=String(front).replace(/\D/g,'');payload.dotRear=String(rear).replace(/\D/g,'');
-  }else{
-    const dot=prompt('DOT (4 číslice):',r.dot);if(dot===null)return;payload.splitDot=false;payload.dot=String(dot).replace(/\D/g,'');
-  }
+  if(r.dotFront&&r.dotRear){const front=prompt('Přední DOT (4 číslice):',r.dotFront);if(front===null)return;const rear=prompt('Zadní DOT (4 číslice):',r.dotRear);if(rear===null)return;payload.splitDot=true;payload.dotFront=String(front).replace(/\D/g,'');payload.dotRear=String(rear).replace(/\D/g,'')}
+  else{const dot=prompt('DOT (4 číslice):',r.dot);if(dot===null)return;payload.splitDot=false;payload.dot=String(dot).replace(/\D/g,'')}
   const km=prompt('Kilometry:',String(r.mileage));if(km===null)return;payload.mileage=Number(String(km).replace(/\D/g,''));
   try{await api('editRecord',payload);await refresh()}catch(x){alert(errorText(x))}
 }
-function renderHist(){renderHistoryUsers();const recs=filteredRecords();let shown=recs.slice(0,300);if(globalFocusRecordId){const focused=recs.find(r=>r.id===globalFocusRecordId);if(focused&&!shown.some(r=>r.id===focused.id))shown=[focused,...shown.slice(0,299)]}$('histCount').textContent='Zobrazeno '+recs.length+' z '+D.records.length+' záznamů'+(recs.length>300?' · na obrazovce prvních 300':'');$('exportCsv').disabled=recs.length===0||!can('historyExport');$('exportCsv').style.display=can('historyExport')?'':'none';$('histList').innerHTML=shown.map(r=>'<div class="item history-record" data-record-id="'+e(r.id||'')+'"><b>'+e(r.plate)+'</b> · '+(r.season==='summer'?'☀️ Letní':'❄️ Zimní')+' · DOT <b>'+e(dotLabel(r))+'</b><div class="small">'+Number(r.mileage).toLocaleString('cs-CZ')+' km · '+e(r.userName)+' · '+dt(r.createdAt)+'</div>'+((can('dotEdit')||can('dotDelete'))?'<div class="toolbar" style="margin-top:6px">'+(can('dotEdit')?'<button class="edit-record secondary" data-p="'+e(r.path)+'">Upravit</button>':'')+(can('dotDelete')?'<button class="danger-btn del" data-p="'+e(r.path)+'">Smazat</button>':'')+'</div>':'')+'</div>').join('')||'<div class="small">Filtru neodpovídá žádný záznam.</div>';if(can('dotEdit'))document.querySelectorAll('.edit-record').forEach(b=>b.onclick=()=>editRecord(b.dataset.p));if(can('dotDelete'))document.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(confirm('Smazat tento záznam? Tato akce se zapíše do auditu.')){await api('deleteRecord',{path:b.dataset.p});refresh()}})}
-$('refresh').onclick=refresh;['histSearch','histFrom','histTo'].forEach(id=>$(id).oninput=renderHist);['histSeason','histUser'].forEach(id=>$(id).onchange=renderHist);$('clearFilters').onclick=()=>{$('histSearch').value='';$('histSeason').value='';$('histUser').value='';$('histFrom').value='';$('histTo').value='';renderHist()};
-$('exportCsv').onclick=()=>{const recs=filteredRecords();if(!recs.length)return alert('Filtru neodpovídá žádný záznam.');const rows=[['SPZ','Vozidlo','Sada','DOT','Kilometry','Uživatel','Datum a čas'],...recs.map(r=>[r.plate,r.vehicle,r.season==='summer'?'Letní':'Zimní',dotLabel(r),r.mileage,r.userName,dt(r.createdAt)])];downloadBlob('\uFEFF'+rows.map(r=>r.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','DOT-Evidence-'+new Date().toISOString().slice(0,10)+'.csv')};
+function renderHist(){
+  if(!$('histList'))return;renderHistoryUsers();const recs=filteredRecords();
+  $('histCount').textContent='Zobrazeno '+recs.length+' z '+historyTotal+' záznamů';
+  $('exportCsv').disabled=historyTotal===0||!can('historyExport');$('exportCsv').style.display=can('historyExport')?'':'none';
+  $('histList').innerHTML=recs.map(r=>'<div class="item history-record" data-record-id="'+e(r.id||'')+'"><b>'+e(r.plate)+'</b> · '+(r.season==='summer'?'☀️ Letní':'❄️ Zimní')+' · DOT <b>'+e(dotLabel(r))+'</b><div class="small">'+Number(r.mileage).toLocaleString('cs-CZ')+' km · '+e(r.userName)+' · '+dt(r.createdAt)+'</div>'+((can('dotEdit')||can('dotDelete'))?'<div class="toolbar" style="margin-top:6px">'+(can('dotEdit')?'<button class="edit-record secondary" data-p="'+e(r.path)+'">Upravit</button>':'')+(can('dotDelete')?'<button class="danger-btn del" data-p="'+e(r.path)+'">Smazat</button>':'')+'</div>':'')+'</div>').join('')||'<div class="small">'+(historyLoading?'Načítám…':'Filtru neodpovídá žádný záznam.')+'</div>';
+  if($('historyLoadMore'))$('historyLoadMore').hidden=historyNextOffset===null;
+  if(can('dotEdit'))document.querySelectorAll('.edit-record').forEach(b=>b.onclick=()=>editRecord(b.dataset.p));
+  if(can('dotDelete'))document.querySelectorAll('.del').forEach(b=>b.onclick=async()=>{if(confirm('Smazat tento záznam? Tato akce se zapíše do auditu.')){await api('deleteRecord',{path:b.dataset.p});await refresh()}});
+}
+$('refresh').onclick=()=>loadHistoryPage(true);
+['histFrom','histTo'].forEach(id=>$(id).oninput=()=>loadHistoryPage(true));
+['histSeason','histUser'].forEach(id=>$(id).onchange=()=>loadHistoryPage(true));
+$('clearFilters').onclick=()=>{$('histSearch').value='';$('histSeason').value='';$('histUser').value='';$('histFrom').value='';$('histTo').value='';loadHistoryPage(true)};
+$('exportCsv').onclick=async()=>{try{const r=await api('historyExportData',historyFilters()),recs=r.records||[];if(!recs.length)return alert('Filtru neodpovídá žádný záznam.');const rows=[['SPZ','Vozidlo','Sada','DOT','Kilometry','Uživatel','Datum a čas'],...recs.map(x=>[x.plate,x.vehicle,x.season==='summer'?'Letní':'Zimní',dotLabel(x),x.mileage,x.userName,dt(x.createdAt)])];downloadBlob('\uFEFF'+rows.map(x=>x.map(csvCell).join(';')).join('\r\n'),'text/csv;charset=utf-8;','DOT-Evidence-'+new Date().toISOString().slice(0,10)+'.csv')}catch(x){alert(errorText(x))}};
 
 // Modular shell
 function moduleCfg(id){
@@ -594,8 +666,8 @@ function renderMainModuleCards(){
 }
 function renderHomePulse(){
   if(!$('homePulse'))return;
-  const activeTasks=(D.tireTasks||[]).filter(t=>t.status!=='closed').length;
-  const attention=(D.attentionIssues||[]).length;
+  const activeTasks=Number(D.taskSummary?.active??(D.tireTasks||[]).filter(t=>t.status!=='closed').length);
+  const attention=Number(D.attentionIssueCount??(D.attentionIssues||[]).length);
   const unread=Number(D.notificationUnreadCount||0);
   const vehicles=(D.cars||[]).length;
   $('homePulse').innerHTML=[
@@ -626,15 +698,16 @@ function openModule(id){
     const active=document.querySelector('#pneu .panel.active')?.id;
     if(!active||!allowedTab(active)){const first=['entry','season','fleet','history'].find(allowedTab);if(first)showTab(first,false)}
   }
+  if(currentModule==='vehicleOverview')loadVehicleOverviewData(false).catch(()=>{});
+  if(currentModule==='pneu')loadCurrentModuleData(false).catch(()=>{});
   if(currentModule==='admin'&&me?.role==='admin')loadAdminState(false).catch(x=>alert(errorText(x)));
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
-  if(currentModule==='tiretask')renderTireTask();
-  if(currentModule==='notifications')renderNotifications();
+  if(currentModule==='tiretask')loadTaskData(false).catch(()=>{});
+  if(currentModule==='notifications')loadNotificationData(false).catch(()=>{});
   if(currentModule==='transport'){renderTrafficReport();loadTrafficReport(false).catch(()=>{})}
   if(currentModule==='settings'){updatePushStatus();loadMyPushDevices();renderNotificationSettings()}
 }
 
-function globalSearchHay(values){return values.map(v=>String(v||'')).join(' ').toLocaleUpperCase('cs-CZ')}
 function globalSearchGroup(title,rows){
   if(!rows.length)return '';
   return '<div class="global-search-group"><div class="global-search-group-title">'+e(title)+'</div>'+rows.join('')+'</div>';
@@ -642,22 +715,20 @@ function globalSearchGroup(title,rows){
 function globalSearchButton(type,id,title,meta,icon){
   return '<button class="global-search-result" data-global-type="'+e(type)+'" data-global-id="'+e(id)+'"><span class="global-search-result-main"><span class="global-search-result-title">'+icon+' '+e(title)+'</span><span class="global-search-result-meta">'+e(meta||'')+'</span></span><span class="global-search-result-arrow">›</span></button>';
 }
-function renderGlobalSearch(){
+async function renderGlobalSearch(){
   if(!$('globalSearchResults'))return;
-  const q=String($('globalSearchInput')?.value||'').trim().toLocaleUpperCase('cs-CZ');
+  const q=String($('globalSearchInput')?.value||'').trim(),seq=++globalSearchSeq;
   if(q.length<2){$('globalSearchResults').innerHTML='<div class="global-search-empty">Napiš alespoň 2 znaky.</div>';return}
-  const vehicles=(D.vehicleOverview||D.cars||[]).filter(v=>globalSearchHay([v.plate,v.name,v.vin,v.category]).includes(q)).slice(0,8)
-    .map(v=>globalSearchButton('vehicle',v.id,v.plate||'Vozidlo',(v.name||'')+(v.category?' · '+v.category:''),'🚗'));
-  const tasks=(D.tireTasks||[]).filter(t=>globalSearchHay([t.carPlate,t.carName,t.category,t.instructions,t.problemNote,t.date,t.targetSeason]).includes(q)).slice(0,8)
-    .map(t=>globalSearchButton('task',t.id,(t.carPlate||'TASK')+' · '+(t.date||''),(t.carName||'')+' · '+tireTaskStatusMeta(t.status).label,'📋'));
-  const records=(D.records||[]).filter(r=>globalSearchHay([r.plate,r.vehicle,r.dot,r.dotFront,r.dotRear,r.mileage,r.userName]).includes(q)).slice(0,8)
-    .map(r=>globalSearchButton('record',r.id,r.plate||'PNEU/DOT',(r.season==='winter'?'❄️ Zimní':'☀️ Letní')+' · DOT '+dotLabel(r)+' · '+Number(r.mileage||0).toLocaleString('cs-CZ')+' km','🛞'));
-  const notifications=(D.notificationInbox||[]).filter(n=>globalSearchHay([n.title,n.body,n.byUserName,n.carPlate]).includes(q)).slice(0,6)
-    .map(n=>globalSearchButton('notification',n.id,n.title||'Oznámení',(n.byUserName||'')+(n.carPlate?' · '+n.carPlate:''),'🔔'));
-  $('globalSearchResults').innerHTML=
-    globalSearchGroup('VOZIDLA',vehicles)+globalSearchGroup('TASKY',tasks)+globalSearchGroup('PNEU / DOT',records)+globalSearchGroup('OZNÁMENÍ',notifications)||
-    '<div class="global-search-empty">Nic nenalezeno.</div>';
-  document.querySelectorAll('.global-search-result').forEach(b=>b.onclick=()=>openGlobalSearchResult(b.dataset.globalType,b.dataset.globalId));
+  $('globalSearchResults').innerHTML='<div class="global-search-empty">Hledám…</div>';
+  try{
+    const r=await api('globalSearch',{q});if(seq!==globalSearchSeq)return;
+    const vehicles=(r.vehicles||[]).map(v=>globalSearchButton('vehicle',v.id,v.plate||'Vozidlo',(v.name||'')+(v.category?' · '+v.category:''),'🚗'));
+    const tasks=(r.tasks||[]).map(t=>globalSearchButton('task',t.id,(t.carPlate||'TASK')+' · '+(t.date||''),(t.carName||'')+' · '+tireTaskStatusMeta(t.status).label,'📋'));
+    const records=(r.records||[]).map(x=>globalSearchButton('record',x.id,x.plate||'PNEU/DOT',(x.season==='winter'?'❄️ Zimní':'☀️ Letní')+' · DOT '+dotLabel(x)+' · '+Number(x.mileage||0).toLocaleString('cs-CZ')+' km','🛞'));
+    const notifications=(r.notifications||[]).map(n=>globalSearchButton('notification',n.id,n.title||'Oznámení',(n.byUserName||'')+(n.carPlate?' · '+n.carPlate:''),'🔔'));
+    $('globalSearchResults').innerHTML=globalSearchGroup('VOZIDLA',vehicles)+globalSearchGroup('TASKY',tasks)+globalSearchGroup('PNEU / DOT',records)+globalSearchGroup('OZNÁMENÍ',notifications)||'<div class="global-search-empty">Nic nenalezeno.</div>';
+    document.querySelectorAll('.global-search-result').forEach(b=>b.onclick=()=>openGlobalSearchResult(b.dataset.globalType,b.dataset.globalId));
+  }catch(x){if(seq===globalSearchSeq)$('globalSearchResults').innerHTML='<div class="global-search-empty">Hledání se nepodařilo.</div>'}
 }
 function openGlobalSearch(){
   if(!$('globalSearchOverlay'))return;
@@ -672,18 +743,18 @@ function openGlobalSearchResult(type,id){
   closeGlobalSearch();
   if(type==='vehicle'){
     if($('vehicleOverviewCategory'))$('vehicleOverviewCategory').value='';
-    if(moduleCfg('vehicleOverview').online!==false&&(me?.role==='admin'||moduleCfg('vehicleOverview').visible!==false)){openModule('vehicleOverview');renderVehicleOverview();focusUi('.vehicle-overview-card[data-car-id="'+CSS.escape(id)+'"]')}
+    if(moduleCfg('vehicleOverview').online!==false&&(me?.role==='admin'||moduleCfg('vehicleOverview').visible!==false)){openModule('vehicleOverview');loadVehicleOverviewData(false).then(()=>focusUi('.vehicle-overview-card[data-car-id="'+CSS.escape(id)+'"]'))}
     else if(hasPneuAccess()){openModule('pneu');showTab('entry',false);renderCarOptions(id);$('car').value=id;prefillMileage(id);valid()}
     return;
   }
-  if(type==='task'){openModule('tiretask');renderTireTask();focusUi('.tiretask-card[data-task-id="'+CSS.escape(id)+'"]');return}
+  if(type==='task'){openModule('tiretask');loadTaskData(false).then(()=>focusUi('.tiretask-card[data-task-id="'+CSS.escape(id)+'"]'));return}
   if(type==='record'){
     globalFocusRecordId=id;
     if($('histSeason'))$('histSeason').value='';if($('histUser'))$('histUser').value='';if($('histFrom'))$('histFrom').value='';if($('histTo'))$('histTo').value='';
-    openModule('pneu');if(allowedTab('history')){showTab('history',false);renderHist();focusUi('.history-record[data-record-id="'+CSS.escape(id)+'"]')}
+    openModule('pneu');if(allowedTab('history')){showTab('history',false);loadHistoryPage(true,id).then(()=>focusUi('.history-record[data-record-id="'+CSS.escape(id)+'"]'))}
     return;
   }
-  if(type==='notification'){notificationView='all';openModule('notifications');renderNotifications();focusUi('.notification-card[data-notification-id="'+CSS.escape(id)+'"]')}
+  if(type==='notification'){notificationView='all';openModule('notifications');loadNotificationData(false).then(()=>focusUi('.notification-card[data-notification-id="'+CSS.escape(id)+'"]'))}
 }
 function trafficStatusMeta(status){
   return status==='critical'?{cls:'critical',icon:'🔴',label:'Vážné omezení'}:
@@ -1379,7 +1450,7 @@ function applyAccess(){
 }
 function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderSeasonDashboard();renderFleet();renderHist();if(me.role==='admin'&&D.adminLoaded)renderAdmin();else if(me.role!=='admin')renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
-function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='season')renderSeasonDashboard();if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
+function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(id==='season')renderSeasonDashboard();if(doRefresh){loadPneuData(false).catch(()=>{});if(id==='fleet'&&can('fleetView'))loadFleetData(false).catch(()=>{});if(id==='history'&&can('historyView'))loadHistoryPage(true).catch(()=>{})}}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
   const modules={};
   MODULE_KEYS.forEach(id=>{
@@ -1473,7 +1544,7 @@ if($('seasonCategory'))$('seasonCategory').onchange=renderSeasonDashboard;
 if($('seasonStatus'))$('seasonStatus').onchange=renderSeasonDashboard;
 if($('seasonSearch'))$('seasonSearch').oninput=renderSeasonDashboard;
 if($('seasonClearFilters'))$('seasonClearFilters').onclick=()=>{$('seasonSearch').value='';$('seasonCategory').value='';$('seasonStatus').value='';renderSeasonDashboard()};
-if($('seasonRefresh'))$('seasonRefresh').onclick=refresh;
+if($('seasonRefresh'))$('seasonRefresh').onclick=()=>loadPneuData(true);
 if($('addTireTaskRow'))$('addTireTaskRow').onclick=()=>{collectTireTaskDraftRows();if(tireTaskDraftRows.length>=6)return;tireTaskDraftRows.push(newTireTaskDraftRow());renderTireTaskDraft()};
 if($('createTireTask'))$('createTireTask').onclick=async()=>{
   const date=$('tireTaskDate').value,rows=collectTireTaskDraftRows();
@@ -1501,9 +1572,10 @@ if($('vehicleOverviewAddCategoryBtn'))$('vehicleOverviewAddCategoryBtn').onclick
   const category=$('vehicleOverviewNewCategory').value.trim();if(!category)return note($('vehicleOverviewCategoryMsg'),'Zadej název skupiny.','msg err');
   try{await api('vehicleCategoryAdd',{category});$('vehicleOverviewNewCategory').value='';note($('vehicleOverviewCategoryMsg'),'Skupina vozidel byla přidána.','msg ok');await refresh()}catch(x){note($('vehicleOverviewCategoryMsg'),errorText(x),'msg err')}
 };
+if($('historyLoadMore'))$('historyLoadMore').onclick=()=>loadHistoryPage(false);
 if($('globalSearchBtn'))$('globalSearchBtn').onclick=openGlobalSearch;
 if($('globalSearchClose'))$('globalSearchClose').onclick=closeGlobalSearch;
-if($('globalSearchInput'))$('globalSearchInput').oninput=()=>{if(globalSearchTimer)clearTimeout(globalSearchTimer);globalSearchTimer=setTimeout(renderGlobalSearch,120)};
+if($('globalSearchInput'))$('globalSearchInput').oninput=()=>{if(globalSearchTimer)clearTimeout(globalSearchTimer);globalSearchTimer=setTimeout(renderGlobalSearch,250)};
 if($('globalSearchOverlay'))$('globalSearchOverlay').onclick=e=>{if(e.target===$('globalSearchOverlay'))closeGlobalSearch()};
 if($('headerNotifications'))$('headerNotifications').onclick=()=>openModule('notifications');
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('globalSearchOverlay')?.hidden)closeGlobalSearch();if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'&&tok){e.preventDefault();openGlobalSearch()}});

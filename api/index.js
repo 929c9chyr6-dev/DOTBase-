@@ -164,7 +164,7 @@ function publicModules(cfg,currentUser){
   }]));
 }
 function actionModule(action){
-  if (['pneuData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
+  if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
   if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
@@ -1127,7 +1127,7 @@ export default async function handler(req, res) {
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
       return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
     }
-    const readOnlyAllowed = new Set(['state','sync','adminState','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs','trafficReport']);
+    const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs','trafficReport']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
@@ -1170,6 +1170,18 @@ export default async function handler(req, res) {
     if(body.action==='notificationData'){
       return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
     }
+    if(body.action==='fleetData'){
+      if(!hasPermission(currentUser,'fleetView'))return json(res,403,{error:'PERMISSION'});
+      const recs=await getRecords(),all=enrichRecords(cfg,recs);
+      const season=String(body.season||''),userId=String(body.userId||''),from=body.from?Date.parse(String(body.from)+'T00:00:00'):NaN,to=body.to?Date.parse(String(body.to)+'T23:59:59.999'):NaN;
+      const filterActive=!!(season||userId||Number.isFinite(from)||Number.isFinite(to));
+      const matchIds=filterActive?new Set(all.filter((r)=>(!season||r.season===season)&&(!userId||r.userId===userId)&&(!Number.isFinite(from)||r.ts>=from)&&(!Number.isFinite(to)||r.ts<=to)).map((r)=>r.carId)):null;
+      const rows=cfg.cars.filter((c)=>c.active!==false&&(!matchIds||matchIds.has(c.id))).map((c)=>{
+        const own=all.filter((r)=>r.carId===c.id),latest=own[0]||null,summer=own.find((r)=>r.season==='summer')||null,winter=own.find((r)=>r.season==='winter')||null;
+        return {id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',latestMileage:latest?.mileage??null,summer:summer?{dot:summer.dot,dotFront:summer.dotFront||'',dotRear:summer.dotRear||'',splitDot:!!summer.splitDot}:null,winter:winter?{dot:winter.dot,dotFront:winter.dotFront||'',dotRear:winter.dotRear||'',splitDot:!!winter.splitDot}:null};
+      }).sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'cs'));
+      return json(res,200,{rows,totalActive:cfg.cars.filter((c)=>c.active!==false).length,users:cfg.users.map((u)=>({id:u.id,name:u.name}))});
+    }
     if(body.action==='historyPage'){
       if(!hasPermission(currentUser,'historyView'))return json(res,403,{error:'PERMISSION'});
       const rows=enrichRecords(cfg,await getRecords());
@@ -1178,7 +1190,7 @@ export default async function handler(req, res) {
       const limit=Math.min(200,Math.max(25,Number(body.limit)||100)),offset=Math.max(0,Number(body.offset)||0),focusId=String(body.focusRecordId||'');
       let page=filtered.slice(offset,offset+limit);
       if(focusId){const focus=filtered.find((r)=>r.id===focusId);if(focus&&!page.some((r)=>r.id===focus.id))page=[focus,...page.slice(0,Math.max(0,limit-1))]}
-      return json(res,200,{records:page,total:filtered.length,nextOffset:offset+limit<filtered.length?offset+limit:null,users:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
+      return json(res,200,{records:page,total:filtered.length,nextOffset:offset+limit<filtered.length?offset+limit:null,users:cfg.users.map((u)=>({id:u.id,name:u.name}))});
     }
     if(body.action==='historyExportData'){
       if(!hasPermission(currentUser,'historyExport'))return json(res,403,{error:'PERMISSION'});
