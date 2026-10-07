@@ -12,8 +12,8 @@ const MODULE_META={
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
 };
 const MODULE_KEYS=Object.keys(MODULE_META);
-const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['notificationsReceive','Přijímat oznámení']];
-const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','attentionEdit']);
+const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['vehicleAdd','Přidat vozidlo'],['vehicleCategoryAdd','Přidat skupinu vozidel'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['tireTaskCreate','Vytvořit task'],['tireTaskEdit','Editovat task'],['notificationsReceive','Přijímat oznámení']];
+const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','vehicleAdd','vehicleCategoryAdd','attentionEdit','tireTaskCreate','tireTaskEdit']);
 function isReadOnly(){return me?.role!=='admin'&&D.system?.mode==='read_only'}
 function can(k){if(isReadOnly()&&WRITE_PERMS.has(k))return false;return me?.role==='admin'||!!D.permissions?.[k]}
 function roleLabel(r){return ROLE_LABELS[r]||r||'—'}
@@ -538,6 +538,14 @@ function openPneuFromTireTask(id){
 
 function renderVehicleOverview(){
   if(!$('vehicleOverviewList'))return;
+  const addCard=$('vehicleOverviewAddCard'),categoryCard=$('vehicleOverviewCategoryAddCard');
+  if(addCard)addCard.hidden=!can('vehicleAdd');
+  if(categoryCard)categoryCard.hidden=!can('vehicleCategoryAdd');
+  if($('vehicleOverviewAddCategory')){
+    const cur=$('vehicleOverviewAddCategory').value;
+    $('vehicleOverviewAddCategory').innerHTML='<option value="">Vyber kategorii…</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'">'+e(x)+'</option>').join('');
+    if(cur&&(D.vehicleCategories||[]).includes(cur))$('vehicleOverviewAddCategory').value=cur;
+  }
   const all=(D.vehicleOverview||[]).slice().sort((a,b)=>{
     if(a.active!==b.active)return a.active?-1:1;
     return String(a.plate||'').localeCompare(String(b.plate||''),'cs');
@@ -914,6 +922,15 @@ document.querySelectorAll('[data-tiretask-view]').forEach(b=>b.onclick=()=>{tire
 if($('tireTaskCarSearch'))$('tireTaskCarSearch').oninput=()=>{tireTaskCarSearch=$('tireTaskCarSearch').value;fillTireTaskCars()};
 if($('vehicleOverviewSearch'))$('vehicleOverviewSearch').oninput=renderVehicleOverview;
 if($('vehicleOverviewCategory'))$('vehicleOverviewCategory').onchange=renderVehicleOverview;
+if($('vehicleOverviewAddCar'))$('vehicleOverviewAddCar').onclick=async()=>{
+  const plate=$('vehicleOverviewAddPlate').value.trim(),name=$('vehicleOverviewAddName').value.trim(),vin=$('vehicleOverviewAddVin').value.trim(),category=$('vehicleOverviewAddCategory').value;
+  if(!plate||!category)return note($('vehicleOverviewAddMsg'),'Doplň SPZ a vyber kategorii vozidla.','msg err');
+  try{await api('vehicleAdd',{plate,name,vin,category});$('vehicleOverviewAddPlate').value=$('vehicleOverviewAddName').value=$('vehicleOverviewAddVin').value='';$('vehicleOverviewAddCategory').value='';note($('vehicleOverviewAddMsg'),'Vozidlo bylo přidáno.','msg ok');await refresh()}catch(x){note($('vehicleOverviewAddMsg'),errorText(x),'msg err')}
+};
+if($('vehicleOverviewAddCategoryBtn'))$('vehicleOverviewAddCategoryBtn').onclick=async()=>{
+  const category=$('vehicleOverviewNewCategory').value.trim();if(!category)return note($('vehicleOverviewCategoryMsg'),'Zadej název skupiny.','msg err');
+  try{await api('vehicleCategoryAdd',{category});$('vehicleOverviewNewCategory').value='';note($('vehicleOverviewCategoryMsg'),'Skupina vozidel byla přidána.','msg ok');await refresh()}catch(x){note($('vehicleOverviewCategoryMsg'),errorText(x),'msg err')}
+};
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
 document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
 document.querySelectorAll('.admin-nav-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.admin-nav-btn').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.admin-pane').forEach(p=>p.classList.toggle('active',p.id==='admin-'+b.dataset.admin))});

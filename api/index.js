@@ -148,12 +148,13 @@ function publicModules(cfg,currentUser){
 function actionModule(action){
   if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
   if (['tireTaskCreate','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
+  if (['vehicleAdd','vehicleCategoryAdd'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices'].includes(action)) return 'settings';
   return null;
 }
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
-const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','attentionView','attentionEdit','notificationsReceive'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsReceive'];
 const BASE_PERMISSIONS = {
   dotView: true,
   dotCreate: true,
@@ -164,8 +165,12 @@ const BASE_PERMISSIONS = {
   historyView: true,
   historyExport: true,
   vehicleDetail: false,
+  vehicleAdd: false,
+  vehicleCategoryAdd: false,
   attentionView: false,
   attentionEdit: false,
+  tireTaskCreate: false,
+  tireTaskEdit: false,
   notificationsReceive: true,
 };
 function normalizeRole(role) {
@@ -259,7 +264,8 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 10;
+  const previousVersion = Number(cfg.version) || 0;
+  cfg.version = 11;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -275,6 +281,10 @@ function normalizeConfig(cfg) {
     u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
     if (u.role !== 'admin') {
       u.permissions ||= {};
+      if (previousVersion < 11 && u.role === 'dispatch') {
+        if (typeof u.permissions.tireTaskCreate !== 'boolean') u.permissions.tireTaskCreate = true;
+        if (typeof u.permissions.tireTaskEdit !== 'boolean') u.permissions.tireTaskEdit = true;
+      }
       for (const k of Object.keys(u.permissions)) if (!PERMISSION_KEYS.includes(k) || typeof u.permissions[k] !== 'boolean') delete u.permissions[k];
     } else {
       delete u.permissions;
@@ -384,11 +394,12 @@ function normalizeTaskTime(v) {
 }
 function tireTaskCapabilities(user) {
   const admin=user?.role==='admin', dispatch=user?.role==='dispatch', technician=user?.role==='technician';
+  const create=hasPermission(user,'tireTaskCreate'),edit=hasPermission(user,'tireTaskEdit');
   return {
     view:true,
-    create:admin||dispatch,
-    edit:admin||dispatch,
-    assign:admin||dispatch,
+    create,
+    edit,
+    assign:create||edit,
     progress:admin||dispatch||technician,
     comment:true,
     close:admin||dispatch||technician,
@@ -603,7 +614,7 @@ async function publicState(cfg, recs, currentUser) {
     vehicleOverview: buildVehicleOverview(cfg, recs),
     tireTasks: (currentUser.role==='admin'||(moduleState(cfg,'tiretask').visible&&moduleState(cfg,'tiretask').online)) ? publicTireTasks(cfg,tireTaskRows) : [],
     tireTaskCapabilities: tireTaskCapabilities(currentUser),
-    tireTaskAssignableUsers: ['admin','dispatch'].includes(currentUser.role) ? cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})) : [],
+    tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),
     records,
     attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,
@@ -1190,6 +1201,29 @@ export default async function handler(req, res) {
       touchCar(car, currentUser);
       await writeConfig(cfg);
       return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'vehicleAdd') {
+      if (!hasPermission(currentUser,'vehicleAdd')) return json(res,403,{error:'PERMISSION'});
+      const plate = cleanPlate(body.plate), name = cleanText(body.name,80), vin = cleanVin(body.vin), category = cleanVehicleCategory(body.category);
+      if (!plate) return json(res,400,{error:'PLATE'});
+      if (!category || !cfg.vehicleCategories.includes(category)) return json(res,400,{error:'VEHICLE_CATEGORY'});
+      if (cfg.cars.some((c)=>c.plate===plate)) return json(res,409,{error:'DUPLICATE'});
+      const now=new Date().toISOString();
+      const car={id:uid('c'),plate,name,vin,category,active:true,createdAt:now,updatedAt:now,lastModifiedAt:now,lastModifiedBy:currentUser.name,lastModifiedById:currentUser.id};
+      cfg.cars.push(car);await writeConfig(cfg);
+      await appendAudit(currentUser,'car_add',`Přidáno auto ${plate} ${name}`,car);
+      return json(res,200,{ok:true,car});
+    }
+
+    if (body.action === 'vehicleCategoryAdd') {
+      if (!hasPermission(currentUser,'vehicleCategoryAdd')) return json(res,403,{error:'PERMISSION'});
+      const category=cleanVehicleCategory(body.category);
+      if (!category) return json(res,400,{error:'VEHICLE_CATEGORY'});
+      if (cfg.vehicleCategories.includes(category)) return json(res,409,{error:'VEHICLE_CATEGORY_DUPLICATE'});
+      cfg.vehicleCategories.push(category);await writeConfig(cfg);
+      await appendAudit(currentUser,'vehicle_category_add',`Přidána kategorie vozidel ${category}`,{category});
+      return json(res,200,{ok:true,vehicleCategories:cfg.vehicleCategories});
     }
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });

@@ -65,6 +65,17 @@
 </div>
 <div id="vehicleOverviewCount" class="small count" style="margin-top:7px"></div>
 </div>
+<div id="vehicleOverviewAddCard" class="card" hidden>
+<h2>＋ Přidat vozidlo</h2>
+<div class="row mobile-stack"><input id="vehicleOverviewAddPlate" maxlength="16" placeholder="SPZ"><input id="vehicleOverviewAddName" maxlength="80" placeholder="Vozidlo / model"></div>
+<input id="vehicleOverviewAddVin" maxlength="32" autocomplete="off" placeholder="VIN (volitelné)" style="margin-top:8px">
+<div class="filter-label" style="margin-top:8px">Skupina vozidla</div><select id="vehicleOverviewAddCategory"><option value="">Vyber kategorii…</option></select>
+<button id="vehicleOverviewAddCar" class="primary" style="width:100%;margin-top:8px">＋ Přidat vozidlo</button><div id="vehicleOverviewAddMsg"></div>
+</div>
+<div id="vehicleOverviewCategoryAddCard" class="card" hidden>
+<h2>＋ Přidat skupinu vozidel</h2><div class="small" style="margin-bottom:8px">Nová skupina se okamžitě objeví ve výběrech kategorií.</div>
+<div class="row mobile-stack"><input id="vehicleOverviewNewCategory" maxlength="40" placeholder="Název skupiny"><button id="vehicleOverviewAddCategoryBtn" class="primary">＋ Přidat skupinu</button></div><div id="vehicleOverviewCategoryMsg"></div>
+</div>
 <div id="vehicleOverviewList" class="vehicle-overview-grid"></div>
 </section>
 
@@ -285,7 +296,7 @@
 
 <div id="admin-users" class="admin-pane">
 <div class="card"><h2>Přidat uživatele</h2><div class="row mobile-stack"><input id="newUserName" placeholder="Jméno"><input id="newUserPin" inputmode="numeric" maxlength="2" placeholder="PIN (2 čísla)" style="max-width:170px"><select id="newUserRole" style="max-width:180px"><option value="driver">Driver</option><option value="dispatch">Dispatch</option><option value="technician">Technician</option></select></div><button id="addUser" class="primary" style="width:100%;margin-top:8px">＋ Přidat uživatele</button></div>
-<div class="card"><h2>Role, oprávnění a PINy</h2><div class="small">Admin má vždy plný systémový přístup. Dispatch, Driver a Technician mají stejný výchozí základ; u každého uživatele můžeš práva individuálně zapnout nebo vypnout. Systémová práva, PINy, audit a online stav zůstávají pouze Adminovi.</div><div id="users"></div></div>
+<div class="card"><h2>Role, oprávnění a PINy</h2><div class="small">Admin má vždy plný systémový přístup. Dispatch, Driver a Technician mají základní oprávnění, která můžeš každému uživateli individuálně zapnout nebo vypnout — včetně přidávání vozidel/skupin a vytváření či editace TIRETASKů. Systémová práva, PINy, audit a online stav zůstávají pouze Adminovi.</div><div id="users"></div></div>
 </div>
 
 <div id="admin-notify" class="admin-pane">
