@@ -572,17 +572,16 @@ function touchCar(car, user, at = new Date().toISOString()) {
   car.lastModifiedBy = user?.name || 'Systém';
   car.lastModifiedById = user?.id || null;
 }
-function buildVehicleOverview(cfg, recs, tireTasks = []) {
-  const rows = enrichRecords(cfg, recs);
-  return cfg.cars.map((car) => {
-    const activeTasks=(tireTasks||[])
-      .filter((t)=>t.carId===car.id&&t.status!=='closed')
+function buildVehicleOverview(cfg,recs,tireTasks=[]){
+  const rows=enrichRecords(cfg,recs),recordsByCar=new Map(),tasksByCar=new Map();
+  for(const r of rows){if(!recordsByCar.has(r.carId))recordsByCar.set(r.carId,[]);recordsByCar.get(r.carId).push(r)}
+  for(const t of tireTasks||[]){if(t.status==='closed')continue;if(!tasksByCar.has(t.carId))tasksByCar.set(t.carId,[]);tasksByCar.get(t.carId).push(t)}
+  return cfg.cars.map((car)=>{
+    const activeTasks=(tasksByCar.get(car.id)||[])
       .sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')))
       .map((t)=>({id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',category:normalizeTireTaskCategory(cfg,t.category)||cleanVehicleCategory(t.category)||''}));
-    const own = rows.filter((r) => r.carId === car.id);
-    const latest = own[0] || null;
-    const summer = own.find((r) => r.season === 'summer') || null;
-    const winter = own.find((r) => r.season === 'winter') || null;
+    const own=recordsByCar.get(car.id)||[],latest=own[0]||null;
+    const summer=own.find((r)=>r.season==='summer')||null,winter=own.find((r)=>r.season==='winter')||null;
     const metaTs = car.lastModifiedAt ? new Date(car.lastModifiedAt).getTime() : 0;
     const recTs = latest?.ts || 0;
     const lastModifiedBy = metaTs >= recTs ? (car.lastModifiedBy || latest?.userName || '—') : (latest?.userName || car.lastModifiedBy || '—');
@@ -652,26 +651,18 @@ async function buildVehicleDetail(cfg, recs, carId) {
     timeline,
   };
 }
-function computeIssues(cfg, recs) {
-  const issues = [];
-  const activeCars = cfg.cars.filter((c) => c.active !== false);
-  const now = Date.now();
-  for (const c of activeCars) {
-    const cr = recs.filter((r) => r.carId === c.id).sort((a, b) => a.ts - b.ts);
-    const s = [...cr].reverse().find((r) => r.season === 'summer');
-    const w = [...cr].reverse().find((r) => r.season === 'winter');
-    const l = cr.at(-1);
-    if (!s) issues.push({ key: 'missing_summer:' + c.id, type: 'missing_summer', carId: c.id, plate: c.plate, vehicle: c.name, mileage: l?.mileage ?? '', text: 'Chybí letní DOT' });
-    if (!w) issues.push({ key: 'missing_winter:' + c.id, type: 'missing_winter', carId: c.id, plate: c.plate, vehicle: c.name, mileage: l?.mileage ?? '', text: 'Chybí zimní DOT' });
-    if (!l) issues.push({ key: 'no_record:' + c.id, type: 'no_record', carId: c.id, plate: c.plate, vehicle: c.name, mileage: '', text: 'Bez jediného záznamu' });
-    if (l && cfg.notificationSettings.staleEnabled && now - l.ts > Number(cfg.notificationSettings.staleDays || 365) * 86400000) {
-      issues.push({ key: 'stale:' + c.id, type: 'stale', carId: c.id, plate: c.plate, vehicle: c.name, recordId: l.id, season: l.season, dot: l.dot, mileage: l.mileage, text: `Poslední záznam starší než ${cfg.notificationSettings.staleDays} dní` });
-    }
-    for (let i = 1; i < cr.length; i++) {
-      if (cr[i].mileage < cr[i - 1].mileage) {
-        issues.push({ key: 'mileage_drop:' + cr[i].id, type: 'mileage_drop', carId: c.id, plate: c.plate, vehicle: c.name, recordId: cr[i].id, season: cr[i].season, dot: cr[i].dot, mileage: cr[i].mileage, text: `Pokles km: ${cr[i - 1].mileage} → ${cr[i].mileage}` });
-      }
-    }
+function computeIssues(cfg,recs){
+  const issues=[],now=Date.now(),byCar=new Map();
+  for(const r of recs||[]){if(!byCar.has(r.carId))byCar.set(r.carId,[]);byCar.get(r.carId).push(r)}
+  for(const c of cfg.cars){
+    if(c.active===false)continue;
+    const desc=byCar.get(c.id)||[],latest=desc[0]||null;
+    const summer=desc.find((r)=>r.season==='summer')||null,winter=desc.find((r)=>r.season==='winter')||null;
+    if(!summer)issues.push({key:'missing_summer:'+c.id,type:'missing_summer',carId:c.id,plate:c.plate,vehicle:c.name,mileage:latest?.mileage??'',text:'Chybí letní DOT'});
+    if(!winter)issues.push({key:'missing_winter:'+c.id,type:'missing_winter',carId:c.id,plate:c.plate,vehicle:c.name,mileage:latest?.mileage??'',text:'Chybí zimní DOT'});
+    if(!latest)issues.push({key:'no_record:'+c.id,type:'no_record',carId:c.id,plate:c.plate,vehicle:c.name,mileage:'',text:'Bez jediného záznamu'});
+    if(latest&&cfg.notificationSettings.staleEnabled&&now-latest.ts>Number(cfg.notificationSettings.staleDays||365)*86400000)issues.push({key:'stale:'+c.id,type:'stale',carId:c.id,plate:c.plate,vehicle:c.name,recordId:latest.id,season:latest.season,dot:latest.dot,mileage:latest.mileage,text:`Poslední záznam starší než ${cfg.notificationSettings.staleDays} dní`});
+    for(let i=desc.length-2;i>=0;i--){const older=desc[i+1],newer=desc[i];if(newer.mileage<older.mileage)issues.push({key:'mileage_drop:'+newer.id,type:'mileage_drop',carId:c.id,plate:c.plate,vehicle:c.name,recordId:newer.id,season:newer.season,dot:newer.dot,mileage:newer.mileage,text:`Pokles km: ${older.mileage} → ${newer.mileage}`})}
   }
   return issues;
 }
@@ -1186,8 +1177,9 @@ export default async function handler(req, res) {
       const season=String(body.season||''),userId=String(body.userId||''),from=body.from?Date.parse(String(body.from)+'T00:00:00'):NaN,to=body.to?Date.parse(String(body.to)+'T23:59:59.999'):NaN;
       const filterActive=!!(season||userId||Number.isFinite(from)||Number.isFinite(to));
       const matchIds=filterActive?new Set(all.filter((r)=>(!season||r.season===season)&&(!userId||r.userId===userId)&&(!Number.isFinite(from)||r.ts>=from)&&(!Number.isFinite(to)||r.ts<=to)).map((r)=>r.carId)):null;
+      const byCar=new Map();for(const r of all){if(!byCar.has(r.carId))byCar.set(r.carId,[]);byCar.get(r.carId).push(r)}
       const rows=cfg.cars.filter((c)=>c.active!==false&&(!matchIds||matchIds.has(c.id))).map((c)=>{
-        const own=all.filter((r)=>r.carId===c.id),latest=own[0]||null,summer=own.find((r)=>r.season==='summer')||null,winter=own.find((r)=>r.season==='winter')||null;
+        const own=byCar.get(c.id)||[],latest=own[0]||null,summer=own.find((r)=>r.season==='summer')||null,winter=own.find((r)=>r.season==='winter')||null;
         return {id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',latestMileage:latest?.mileage??null,summer:summer?{dot:summer.dot,dotFront:summer.dotFront||'',dotRear:summer.dotRear||'',splitDot:!!summer.splitDot}:null,winter:winter?{dot:winter.dot,dotFront:winter.dotFront||'',dotRear:winter.dotRear||'',splitDot:!!winter.splitDot}:null};
       }).sort((a,b)=>String(a.plate).localeCompare(String(b.plate),'cs'));
       return json(res,200,{rows,totalActive:cfg.cars.filter((c)=>c.active!==false).length,users:cfg.users.map((u)=>({id:u.id,name:u.name}))});
