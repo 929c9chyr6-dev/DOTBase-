@@ -997,7 +997,21 @@ export default async function handler(req, res) {
   try {
     if (body.action === 'loginUsers') {
       const cfg=await readConfig();
-      return json(res,200,{users:cfg.users.filter((u)=>u.active).map((u)=>({id:u.id,name:u.name,role:u.role}))});
+      return json(res,200,{users:cfg.users.filter((u)=>u.active).map((u)=>{
+        const reset=normalizePinChangeRequired(u.pinChangeRequired);
+        return {id:u.id,name:u.name,role:u.role,resetWithoutOldPin:!!(reset?.required&&reset.requireOldPin===false)};
+      })});
+    }
+
+    if (body.action === 'beginPinReset') {
+      const userId=String(body.userId||''),cfg=await readConfig();
+      const u=cfg.users.find((x)=>x.id===userId&&x.active);
+      if(!u)return json(res,404,{error:'USER'});
+      if(u.role==='admin')return json(res,403,{error:'ADMIN_PIN_RESET'});
+      const reset=normalizePinChangeRequired(u.pinChangeRequired);
+      if(!reset?.required||reset.requireOldPin!==false)return json(res,403,{error:'PIN_RESET_NOT_AVAILABLE',message:'Pro tento účet není povolen reset bez stávajícího PINu.'});
+      const token=sign({uid:u.id,role:u.role,pinResetOnly:true,resetRequestedAt:reset.requestedAt,exp:Date.now()+15*60*1000});
+      return json(res,200,{token,user:{id:u.id,name:u.name,role:u.role},pinChangeRequired:reset});
     }
 
     if (body.action === 'login') {
@@ -1061,6 +1075,10 @@ export default async function handler(req, res) {
     if (!currentUser) return json(res, 401, { error: 'AUTH' });
 
     const pinReset=normalizePinChangeRequired(currentUser.pinChangeRequired);
+    if(session.pinResetOnly){
+      if(body.action!=='changeOwnPin')return json(res,403,{error:'PIN_RESET_ONLY',message:'Tento dočasný přístup slouží pouze ke změně PINu.'});
+      if(!pinReset?.required||pinReset.requireOldPin!==false||session.resetRequestedAt!==pinReset.requestedAt)return json(res,401,{error:'AUTH'});
+    }
     if(pinReset&&body.action!=='changeOwnPin'){
       return json(res,423,{error:'PIN_CHANGE_REQUIRED',message:'Než bude možné pokračovat, je nutné nastavit nový PIN.',requireOldPin:pinReset.requireOldPin});
     }

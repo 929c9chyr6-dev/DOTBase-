@@ -47,7 +47,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
@@ -61,7 +61,24 @@ async function loadLoginUsers(){
     const selected=localStorage.getItem('lastLoginUserId')||'';
     $('loginUser').innerHTML='<option value="">Vyber uživatele…</option>'+loginUsers.map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
     if(loginUsers.some(u=>u.id===selected))$('loginUser').value=selected;
-  }catch{$('loginUser').innerHTML='<option value="">Uživatele se nepodařilo načíst</option>'}
+    updateLoginResetOption();
+  }catch{$('loginUser').innerHTML='<option value="">Uživatele se nepodařilo načíst</option>';updateLoginResetOption()}
+}
+function updateLoginResetOption(){
+  const u=loginUsers.find(x=>x.id===$('loginUser')?.value);
+  if($('loginResetWithoutOld'))$('loginResetWithoutOld').hidden=!u?.resetWithoutOldPin;
+  if($('loginResetHint'))$('loginResetHint').hidden=!u?.resetWithoutOldPin;
+}
+async function beginResetWithoutOldPin(){
+  const userId=$('loginUser').value;
+  if(!userId)return note($('loginMsg'),'Vyber svůj účet.','msg err');
+  $('loginResetWithoutOld').disabled=true;
+  try{
+    const r=await api('beginPinReset',{userId});
+    tok=r.token;me=r.user;localStorage.setItem('lastLoginUserId',userId);lastInteraction=Date.now();
+    $('pin').value='';showPinChangeScreen(r.pinChangeRequired||{required:true,requireOldPin:false});
+  }catch(x){note($('loginMsg'),errorText(x),'msg err')}
+  finally{$('loginResetWithoutOld').disabled=false}
 }
 async function login(){
   const userId=$('loginUser').value,p=$('pin').value.replace(/\D/g,'').slice(0,4);$('pin').value=p;
@@ -121,6 +138,8 @@ async function submitOwnPinChange(){
 $('pinChangeSubmit').onclick=submitOwnPinChange;
 $('pinChangeLogout').onclick=()=>lockApp();
 $('pinChangeConfirm').onkeydown=x=>{if(x.key==='Enter')submitOwnPinChange()};
+$('loginUser').onchange=()=>{updateLoginResetOption();$('loginMsg').innerHTML=''};
+$('loginResetWithoutOld').onclick=beginResetWithoutOldPin;
 $('loginBtn').onclick=login;$('pin').onkeydown=x=>{if(x.key==='Enter')login()};
 $('lock').onclick=()=>lockApp();
 async function refresh(){
@@ -1183,7 +1202,7 @@ function renderAdminUsers(){
 function openAdminPinReset(id){
   const u=(D.users||[]).find(x=>x.id===id);if(!u)return;
   pinResetAdminUserId=id;$('pinAdminResetUser').textContent=u.name;
-  $('pinAdminResetLead').textContent=u.loginLockedAt?'Tento účet je zablokovaný po 3 chybných pokusech. Odesláním výzvy se účet odemkne a uživatel bude muset dokončit změnu PINu.':'Účet bude po přihlášení uzamčený pouze na obrazovku změny PINu. Stávající PIN se tímto krokem nemění.';
+  $('pinAdminResetLead').textContent=u.loginLockedAt?'Tento účet je zablokovaný po 3 chybných pokusech. Odesláním výzvy se účet odemkne a uživatel bude muset dokončit změnu PINu.':'Výzva uživateli vynutí nastavení nového PINu. Pokud níže vypneš požadavek na starý PIN, na přihlašovací obrazovce dostane možnost přejít rovnou ke změně PINu.';
   $('pinAdminRequireOld').value=u.pinChangeRequired?.required&&u.pinChangeRequired.requireOldPin===false?'no':'yes';
   $('pinAdminResetMsg').innerHTML='';$('pinAdminResetOverlay').hidden=false;
 }
