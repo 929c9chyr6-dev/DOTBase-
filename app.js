@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskCarSearch='';
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskCarSearch='',editingCarId=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const MODULE_META={
@@ -740,10 +740,43 @@ function renderVehicleCategories(){
   if($('vehicleCategoryList'))$('vehicleCategoryList').innerHTML=(D.vehicleCategories||[]).map(x=>'<span class="vehicle-category-badge">'+e(x)+'</span>').join(' ')||'<span class="small">Žádné kategorie.</span>';
 }
 $('addCar').onclick=async()=>{const plate=$('newPlate').value.trim(),name=$('newName').value.trim(),vin=$('newVin').value.trim(),category=$('newVehicleCategory').value;if(!plate||!category)return alert('Doplň SPZ a vyber kategorii vozidla.');try{await api('adminAddCar',{plate,name,vin,category});$('newPlate').value=$('newName').value=$('newVin').value='';$('newVehicleCategory').value='';await refresh()}catch(x){alert(errorText(x))}};
-async function editCar(id){const c=(D.allCars||[]).find(x=>x.id===id);if(!c)return;const plate=prompt('SPZ:',c.plate);if(plate===null)return;const name=prompt('Název vozidla:',c.name||'');if(name===null)return;const vin=prompt('VIN:',c.vin||'');if(vin===null)return;try{await api('adminUpdateCar',{carId:id,plate,name,vin,category:c.category||''});await refresh()}catch(x){alert(errorText(x))}}
+function editCar(id){editingCarId=id;renderAdminCars()}
+function cancelCarEdit(){editingCarId=null;renderAdminCars()}
+async function saveCarEdit(id){
+  const row=document.querySelector('.checkrow.editing[data-id="'+id+'"]');if(!row)return;
+  const plate=row.querySelector('.car-edit-plate')?.value.trim()||'',name=row.querySelector('.car-edit-name')?.value.trim()||'',vin=row.querySelector('.car-edit-vin')?.value.trim()||'',category=row.querySelector('.car-edit-category')?.value||'';
+  if(!plate)return alert('Doplň SPZ vozidla.');
+  if(!category)return alert('Vyber kategorii vozidla.');
+  const save=row.querySelector('.save-car-edit');if(save)save.disabled=true;
+  try{await api('adminUpdateCar',{carId:id,plate,name,vin,category});editingCarId=null;await refresh()}
+  catch(x){if(save)save.disabled=false;alert(errorText(x))}
+}
 async function setCarActive(id,active){if(!confirm(active?'Obnovit toto auto z archivu?':'Archivovat toto auto? Historie zůstane zachována.'))return;await api('adminSetCarActive',{carId:id,active});await refresh()}
-function carAdminRow(c,active){return '<div class="item checkrow"><input class="'+(active?'active-car-check':'arch-car-check')+'" type="checkbox" value="'+e(c.id)+'"><div><b>'+e(c.plate)+'</b> '+e(c.name||'')+(c.vin?'<div class="small">VIN: '+e(c.vin)+'</div>':'')+'<div class="filter-label">Kategorie</div><select class="car-category-select" data-id="'+e(c.id)+'">'+vehicleCategoryOptions(c.category||'',true)+'</select></div><div class="toolbar"><button class="car-detail secondary" data-id="'+e(c.id)+'">Detail</button><button class="edit-car secondary" data-id="'+e(c.id)+'">Upravit</button><button class="toggle-car '+(active?'danger-btn':'primary')+'" data-id="'+e(c.id)+'" data-active="'+(!active)+'">'+(active?'Archivovat':'Obnovit')+'</button></div></div>'}
-function renderAdminCars(){renderVehicleCategories();const all=D.allCars||[],active=all.filter(c=>c.active!==false),arch=all.filter(c=>c.active===false);$('adminCars').innerHTML=active.map(c=>carAdminRow(c,true)).join('')||'<div class="small">Žádná aktivní auta.</div>';$('archivedCars').innerHTML=arch.map(c=>carAdminRow(c,false)).join('')||'<div class="small">Archiv je prázdný.</div>';document.querySelectorAll('.car-detail').forEach(b=>b.onclick=()=>openAdminVehicle(b.dataset.id));document.querySelectorAll('.edit-car').forEach(b=>b.onclick=()=>editCar(b.dataset.id));document.querySelectorAll('.toggle-car').forEach(b=>b.onclick=()=>setCarActive(b.dataset.id,b.dataset.active==='true'));document.querySelectorAll('.car-category-select').forEach(s=>s.onchange=async()=>{if(!s.value){await refresh();return}try{await api('adminSetCarCategory',{carId:s.dataset.id,category:s.value});await refresh()}catch(x){alert(errorText(x));await refresh()}})}
+function carAdminRow(c,active){
+  const check='<input class="'+(active?'active-car-check':'arch-car-check')+'" type="checkbox" value="'+e(c.id)+'">';
+  if(editingCarId===c.id)return '<div class="item checkrow editing" data-id="'+e(c.id)+'">'+check+
+    '<div class="car-admin-fields">'+
+      '<div><div class="filter-label">SPZ</div><input class="car-edit-plate" maxlength="16" value="'+e(c.plate||'')+'"></div>'+
+      '<div><div class="filter-label">Vozidlo / model</div><input class="car-edit-name" maxlength="80" value="'+e(c.name||'')+'"></div>'+
+      '<div><div class="filter-label">VIN</div><input class="car-edit-vin" maxlength="32" value="'+e(c.vin||'')+'"></div>'+
+      '<div><div class="filter-label">Kategorie</div><select class="car-edit-category">'+vehicleCategoryOptions(c.category||'',false)+'</select></div>'+
+    '</div>'+
+    '<div class="toolbar car-edit-actions"><button class="save-car-edit primary" data-id="'+e(c.id)+'">💾 Uložit změny</button><button class="cancel-car-edit secondary">Zrušit</button></div>'+
+    '</div>';
+  return '<div class="item checkrow" data-id="'+e(c.id)+'">'+check+'<div><b>'+e(c.plate)+'</b> '+e(c.name||'')+(c.vin?'<div class="small">VIN: '+e(c.vin)+'</div>':'')+'<div style="margin-top:5px"><span class="vehicle-category-badge">'+e(c.category||'BEZ KATEGORIE')+'</span></div></div><div class="toolbar"><button class="car-detail secondary" data-id="'+e(c.id)+'">Detail</button><button class="edit-car secondary" data-id="'+e(c.id)+'">✏️ Upravit</button><button class="toggle-car '+(active?'danger-btn':'primary')+'" data-id="'+e(c.id)+'" data-active="'+(!active)+'">'+(active?'Archivovat':'Obnovit')+'</button></div></div>';
+}
+function renderAdminCars(){
+  renderVehicleCategories();
+  const all=D.allCars||[],active=all.filter(c=>c.active!==false),arch=all.filter(c=>c.active===false);
+  if(editingCarId&&!all.some(c=>c.id===editingCarId))editingCarId=null;
+  $('adminCars').innerHTML=active.map(c=>carAdminRow(c,true)).join('')||'<div class="small">Žádná aktivní auta.</div>';
+  $('archivedCars').innerHTML=arch.map(c=>carAdminRow(c,false)).join('')||'<div class="small">Archiv je prázdný.</div>';
+  document.querySelectorAll('.car-detail').forEach(b=>b.onclick=()=>openAdminVehicle(b.dataset.id));
+  document.querySelectorAll('.edit-car').forEach(b=>b.onclick=()=>editCar(b.dataset.id));
+  document.querySelectorAll('.save-car-edit').forEach(b=>b.onclick=()=>saveCarEdit(b.dataset.id));
+  document.querySelectorAll('.cancel-car-edit').forEach(b=>b.onclick=cancelCarEdit);
+  document.querySelectorAll('.toggle-car').forEach(b=>b.onclick=()=>setCarActive(b.dataset.id,b.dataset.active==='true'));
+}
 $('selectAllActive').onclick=()=>document.querySelectorAll('.active-car-check').forEach(x=>x.checked=true);$('selectAllArchived').onclick=()=>document.querySelectorAll('.arch-car-check').forEach(x=>x.checked=true);
 async function bulkCars(selector,active){const ids=[...document.querySelectorAll(selector+':checked')].map(x=>x.value);if(!ids.length)return alert('Nejdřív vyber auta.');if(!confirm((active?'Obnovit ':'Archivovat ')+ids.length+' aut?'))return;await api('adminBulkCars',{carIds:ids,active});await refresh()}
 $('bulkArchive').onclick=()=>bulkCars('.active-car-check',false);$('bulkRestore').onclick=()=>bulkCars('.arch-car-check',true);
