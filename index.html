@@ -104,7 +104,12 @@
 <div><div class="filter-label">Datum</div><input id="tireTaskDate" type="date"></div>
 <div><div class="filter-label">Čas <span class="small">(volitelné)</span></div><input id="tireTaskTime" type="time"><div class="small" style="margin-top:4px">Bez času = úkol na celý den.</div></div>
 </div>
-<div style="margin-top:8px"><div class="filter-label">Vozidlo</div><select id="tireTaskCar"><option value="">Vyber vozidlo…</option></select></div>
+<div style="margin-top:8px">
+<div class="filter-label">Vozidlo</div>
+<div class="search-wrap"><span class="search-icon">🔎</span><input id="tireTaskCarSearch" type="search" autocomplete="off" placeholder="Hledat podle SPZ, modelu nebo VIN…"></div>
+<div id="tireTaskCarCount" class="small" style="margin-top:4px"></div>
+<select id="tireTaskCar" style="margin-top:6px"><option value="">Vyber vozidlo…</option></select>
+</div>
 <div class="filter-grid" style="margin-top:8px">
 <div><div class="filter-label">Kategorie</div><select id="tireTaskCategory"><option value="pool">POOL</option><option value="manager">MANAŽER</option><option value="vip">VIP</option></select></div>
 <div><div class="filter-label">Přezout na</div><select id="tireTaskSeason"><option value="winter">❄️ Zimní</option><option value="summer">☀️ Letní</option></select></div>

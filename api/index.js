@@ -147,7 +147,7 @@ function publicModules(cfg,currentUser){
 }
 function actionModule(action){
   if (['addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (['tireTaskCreate','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose'].includes(action)) return 'tiretask';
+  if (['tireTaskCreate','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices'].includes(action)) return 'settings';
   return null;
@@ -373,6 +373,7 @@ function tireTaskCapabilities(user) {
     progress:admin||dispatch||technician,
     comment:true,
     close:admin||dispatch||technician,
+    delete:admin||dispatch,
   };
 }
 async function getTireTasks() {
@@ -996,6 +997,18 @@ export default async function handler(req, res) {
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'closed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Úkol uzavřen jako dokončený'});task.activity=task.activity.slice(-200);
       await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_close','TIRETASK uzavřen jako dokončený',{taskId:task.id});
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
+    }
+
+    if (body.action === 'tireTaskDelete') {
+      const caps=tireTaskCapabilities(currentUser);
+      if(!caps.delete)return json(res,403,{error:'PERMISSION'});
+      const rows=await getTireTasks(),idx=rows.findIndex((x)=>x.id===String(body.taskId||''));
+      if(idx<0)return json(res,404,{error:'TIRETASK'});
+      const task=rows[idx],car=cfg.cars.find((x)=>x.id===task.carId);
+      rows.splice(idx,1);
+      await writeTireTasks(rows);
+      await appendAudit(currentUser,'tiretask_delete','Smazán TIRETASK '+(car?.plate||task.carId||'')+' · '+(task.date||''),{task});
+      return json(res,200,{ok:true,id:task.id});
     }
 
     if (body.action === 'pushSubscribe') {
