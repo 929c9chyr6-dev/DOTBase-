@@ -666,7 +666,8 @@ async function publicState(cfg,recs,currentUser){
   const [notifications,tireTaskRows]=await Promise.all([getNotificationLog(),getTireTasks()]);
   const notice=buildNotificationData(cfg,currentUser,notifications,false);
   const publicTasks=publicTireTasks(cfg,tireTaskRows,recs);
-  const myTaskSummary=publicTasks.filter((t)=>t.assignedToUserId===currentUser.id&&t.status!=='closed').slice(0,8).map((t)=>({
+  const myActiveTasks=publicTasks.filter((t)=>t.assignedToUserId===currentUser.id&&t.status!=='closed');
+  const myTaskSummary=myActiveTasks.slice(0,8).map((t)=>({
     id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carPlate:t.carPlate||'',carName:t.carName||'',category:t.category||'',problemNote:t.problemNote||''
   }));
   const issues=perms.attentionView?computeIssues(cfg,recs):[];
@@ -678,7 +679,7 @@ async function publicState(cfg,recs,currentUser){
     cars:cfg.cars.filter((c)=>c.active!==false),
     records,recordTotal:recs.length,
     taskSummary:{active:tireTaskRows.filter((t)=>t.status!=='closed').length},
-    myTaskSummary,
+    myTaskSummary,myTaskCount:myActiveTasks.length,
     attentionIssueCount:issues.length,
     tireTaskCapabilities:tireTaskCapabilities(currentUser),
     ...notice,
@@ -1091,7 +1092,7 @@ export default async function handler(req, res) {
       }));
       const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
-      if(assignee)await notifyTaskAssigned(cfg,created,assignee,currentUser);
+      if(assignee)await notifyTaskAssigned(cfg,created,assignee,currentUser).catch((err)=>console.error('task assignment notify',err?.message));
       return json(res,200,{ok:true,batchId,count:created.length,tasks:publicTireTasks(cfg,created)});
     }
 
@@ -1124,7 +1125,7 @@ export default async function handler(req, res) {
       };
       const rows=await getTireTasks();rows.push(task);await writeTireTasks(rows);
       await appendAudit(currentUser,'tiretask_create',`Vytvořen TASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
-      if(assignee)await notifyTaskAssigned(cfg,[task],assignee,currentUser);
+      if(assignee)await notifyTaskAssigned(cfg,[task],assignee,currentUser).catch((err)=>console.error('task assignment notify',err?.message));
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1153,7 +1154,7 @@ export default async function handler(req, res) {
       await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_update','Upraven TASK',{taskId:task.id,before,after:{date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,assignedToUserId:task.assignedToUserId||null,instructions:task.instructions}});
       if(before.assignedToUserId!==task.assignedToUserId&&task.assignedToUserId){
         const newlyAssigned=cfg.users.find((u)=>u.id===task.assignedToUserId&&u.active!==false);
-        if(newlyAssigned)await notifyTaskAssigned(cfg,[task],newlyAssigned,currentUser);
+        if(newlyAssigned)await notifyTaskAssigned(cfg,[task],newlyAssigned,currentUser).catch((err)=>console.error('task reassignment notify',err?.message));
       }
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
@@ -1192,7 +1193,7 @@ export default async function handler(req, res) {
       const activityText=status==='in_progress'?(before==='problem'?'Pokračování po problému':'Úkol rozpracován'):status==='problem'?('Problém: '+(task.problemNote||'bez popisu')):'Vráceno do plánovaných';
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'status',at:now,userId:currentUser.id,userName:currentUser.name,text:activityText});task.activity=task.activity.slice(-200);
       await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_status',`TASK stav ${before} → ${status}`,{taskId:task.id,problemNote:task.problemNote});
-      if(status==='problem')await notifyTaskProblem(cfg,task,currentUser);
+      if(status==='problem')await notifyTaskProblem(cfg,task,currentUser).catch((err)=>console.error('task problem notify',err?.message));
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
