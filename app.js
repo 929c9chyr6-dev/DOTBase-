@@ -1599,6 +1599,6 @@ setInterval(()=>{
 },60000);
 setInterval(()=>{if(tok&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))syncCheck()},30000);
 setInterval(()=>{if(tok&&currentModule==='admin'&&me?.role==='admin')loadAdminState(true).catch(()=>{})},60000);
-setInterval(heartbeat,90000);
+setInterval(()=>{if(tok&&document.visibilityState==='visible')heartbeat()},90000);
 applyTheme();loadLoginUsers();if('serviceWorker'in navigator)ensureSW().catch(()=>{});
 })();
