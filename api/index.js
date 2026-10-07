@@ -5,7 +5,6 @@ import webpush from 'web-push';
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
-const GOLEMIO_API_KEY = process.env.GOLEMIO_API_KEY || '';
 const attempts = globalThis.__dotAttempts || (globalThis.__dotAttempts = new Map());
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
@@ -28,80 +27,6 @@ function normalizeUserNotificationPrefs(raw) {
   const input=raw&&typeof raw==='object'?raw:{};
   return { operational: input.operational !== false, adminInfo: input.adminInfo !== false };
 }
-const DEFAULT_TRANSPORT_CORRIDORS = [
-  { id:'jenec', name:'Jeneč a okolí', type:'area', active:true, notifyAllowed:true, description:'Perimetr obce Jeneč a nejbližšího okolí.', matchTerms:['jeneč','jenec','hostivice','dobrovíz','dobroviz'] },
-  { id:'d0-west', name:'D0 · Středokluky → Lochkov', type:'route', active:true, notifyAllowed:true, description:'Západní část Pražského okruhu od Středokluk po Lochkov.', matchTerms:['pražský okruh','prazsky okruh','d0','středokluky','stredokluky','ruzyň','ruzyne','zličín','zlicin','třebonice','trebonice','slivenec','lochkov'] },
-  { id:'lochkov-tunnels', name:'Tunely u Lochkova', type:'route', active:true, notifyAllowed:true, description:'Tunelové úseky a bezprostřední okolí Lochkova.', matchTerms:['lochkov','lochkovský tunel','lochkovsky tunel','tunel lochkov'] },
-  { id:'d6-west', name:'D6 · Praha → Velká Dobrá', type:'route', active:true, notifyAllowed:true, description:'D6 od Prahy směrem na Velkou Dobrou.', matchTerms:['d6','velká dobrá','velka dobra','pavlov','jinočany','jinocany','hostivice','ruzyň','ruzyne'] },
-  { id:'rozvadovska', name:'Rozvadovská spojka', type:'route', active:true, notifyAllowed:true, description:'Rozvadovská spojka a navazující příjezdy.', matchTerms:['rozvadovská spojka','rozvadovska spojka','rozvadovská','rozvadovska'] },
-  { id:'plzenska', name:'Plzeňská', type:'route', active:true, notifyAllowed:true, description:'Hlavní tah Plzeňskou ulicí.', matchTerms:['plzeňská','plzenska'] },
-  { id:'evropska', name:'Evropská', type:'route', active:true, notifyAllowed:true, description:'Hlavní tah Evropskou ulicí.', matchTerms:['evropská','evropska'] },
-];
-const DEFAULT_TRANSPORT_SETTINGS = {
-  enabled: true,
-  notificationsEnabled: true,
-  userSettingsVisible: true,
-  cacheMinutes: 3,
-  pollMinutes: 5,
-};
-const DEFAULT_TRANSPORT_PREFS = {
-  notificationsEnabled: false,
-  corridorIds: [],
-  severity: 'significant',
-  repeatMode: 'change',
-  repeatMinutes: 60,
-  resolved: true,
-};
-function cloneDefaultCorridors(){ return DEFAULT_TRANSPORT_CORRIDORS.map((x)=>({ ...x, matchTerms:[...x.matchTerms] })); }
-function normalizeTransportConfig(raw) {
-  const input = raw && typeof raw === 'object' ? raw : {};
-  let corridors = Array.isArray(input.corridors) && input.corridors.length ? input.corridors : cloneDefaultCorridors();
-  corridors = corridors.slice(0, 40).map((x, i) => ({
-    id: String(x?.id || ('route-' + i)).replace(/[^a-zA-Z0-9_-]/g,'').slice(0,40) || ('route-' + i),
-    name: cleanText(x?.name || 'Sledovaný úsek', 80),
-    type: x?.type === 'area' ? 'area' : 'route',
-    active: x?.active !== false,
-    notifyAllowed: x?.notifyAllowed !== false,
-    description: cleanText(x?.description || '', 180),
-    matchTerms: [...new Set((Array.isArray(x?.matchTerms) ? x.matchTerms : []).map((t)=>cleanText(t,60)).filter(Boolean))].slice(0,30),
-  })).filter((x)=>x.name);
-  return {
-    enabled: input.enabled !== false,
-    notificationsEnabled: input.notificationsEnabled !== false,
-    userSettingsVisible: input.userSettingsVisible !== false,
-    cacheMinutes: Math.min(15, Math.max(1, Number(input.cacheMinutes) || DEFAULT_TRANSPORT_SETTINGS.cacheMinutes)),
-    pollMinutes: Math.min(60, Math.max(3, Number(input.pollMinutes) || DEFAULT_TRANSPORT_SETTINGS.pollMinutes)),
-    corridors,
-  };
-}
-function normalizeTransportPrefs(raw, transport) {
-  const input = raw && typeof raw === 'object' ? raw : {};
-  const allowed = new Set((transport?.corridors || []).map((x)=>x.id));
-  let ids = Array.isArray(input.corridorIds) ? input.corridorIds.map(String).filter((id)=>allowed.has(id)) : [];
-  if (!ids.length) ids = (transport?.corridors || []).filter((x)=>x.active).map((x)=>x.id);
-  return {
-    notificationsEnabled: !!input.notificationsEnabled,
-    corridorIds: [...new Set(ids)].slice(0,40),
-    severity: ['critical','significant','all'].includes(input.severity) ? input.severity : DEFAULT_TRANSPORT_PREFS.severity,
-    repeatMode: ['once','change','interval'].includes(input.repeatMode) ? input.repeatMode : DEFAULT_TRANSPORT_PREFS.repeatMode,
-    repeatMinutes: Math.min(240, Math.max(15, Number(input.repeatMinutes) || DEFAULT_TRANSPORT_PREFS.repeatMinutes)),
-    resolved: input.resolved !== false,
-  };
-}
-function publicTransportConfig(cfg, user) {
-  const t = normalizeTransportConfig(cfg.transport);
-  return {
-    enabled: t.enabled,
-    notificationsEnabled: t.notificationsEnabled,
-    userSettingsVisible: t.userSettingsVisible,
-    pollMinutes: t.pollMinutes,
-    sourceConfigured: !!GOLEMIO_API_KEY,
-    sourceName: 'NDIC přes Golemio',
-    corridors: t.corridors.filter((x)=>x.active).map(({matchTerms,...x})=>x),
-    prefs: normalizeTransportPrefs(user?.transportPrefs, t),
-  };
-}
-
 const SYSTEM_MODES = ['normal', 'read_only', 'maintenance'];
 const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', updatedAt: null, updatedBy: null };
 function systemState(cfg) {
@@ -115,16 +40,15 @@ function defaultSystemMessage(mode) {
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
-const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings'];
+const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','maintenance','notifications','settings'];
 const MODULE_LABELS = {
-  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TASK', transport:'DOPRAVA', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
+  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TASK', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
 };
 const DEFAULT_MODULES = {
   vehicleOverview:{ visible:true, online:true, offlineMessage:'Přehled vozidel je dočasně mimo provoz.' },
   service:{ visible:true, online:true, offlineMessage:'Modul SERVIS je dočasně mimo provoz.' },
   pneu:{ visible:true, online:true, offlineMessage:'Modul PNEU / DOT je dočasně mimo provoz.' },
   tiretask:{ visible:true, online:true, offlineMessage:'Modul TASK je dočasně mimo provoz.' },
-  transport:{ visible:true, online:true, offlineMessage:'Dopravní report je dočasně mimo provoz.' },
   maintenance:{ visible:true, online:true, offlineMessage:'Modul ÚDRŽBA je dočasně mimo provoz.' },
   notifications:{ visible:true, online:true, offlineMessage:'Modul OZNÁMENÍ je dočasně mimo provoz.' },
   settings:{ visible:true, online:true, offlineMessage:'Nastavení aplikace je dočasně mimo provoz.' },
@@ -167,7 +91,6 @@ function actionModule(action){
   if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
   if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
-  if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
   if (['notificationData','sendOperationalNotification'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
   return null;
@@ -303,13 +226,13 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 17;
+  cfg.version = 18;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
   cfg.system = systemState(cfg);
-  cfg.transport = normalizeTransportConfig(cfg.transport);
+  delete cfg.transport;
   cfg.modules = normalizeModules(cfg.modules);
   for (const u of cfg.users) {
     if (u.active === undefined) u.active = true;
@@ -317,7 +240,7 @@ function normalizeConfig(cfg) {
     if (!u.lastLoginAt) u.lastLoginAt = null;
     if(previousVersion<15)u.pinHash=migrateLegacyTwoDigitPinHash(u.pinHash);
     u.role = normalizeRole(u.role);
-    u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
+    delete u.transportPrefs;
     u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
     u.pinChangeRequired = normalizePinChangeRequired(u.pinChangeRequired);
     u.failedPinAttempts = Math.max(0, Math.min(3, Number(u.failedPinAttempts) || 0));
@@ -706,7 +629,7 @@ function userStats(cfg, recs, pushes, presence) {
 function buildNotificationData(cfg,currentUser,notifications,includeInbox=false){
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c]));
   const userById=Object.fromEntries(cfg.users.map((u)=>[u.id,u]));
-  const rows=(notifications||[]).map(normalizeNotificationRecord).filter((n)=>Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
+  const rows=(notifications||[]).map(normalizeNotificationRecord).filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n.type||''))&&Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
   const publicNotification=(n)=>{
     const ack=(n.acks||[]).find((a)=>a.userId===currentUser.id)||null;
     const seen=(n.seen||[]).find((a)=>a.userId===currentUser.id)||null;
@@ -749,7 +672,6 @@ async function publicState(cfg,recs,currentUser){
     tireTaskCapabilities:tireTaskCapabilities(currentUser),
     ...notice,
     system:(()=>{const s=systemState(cfg);return {mode:s.mode,message:s.message||defaultSystemMessage(s.mode),customMessage:currentUser.role==='admin'?(s.message||''):undefined,updatedAt:s.updatedAt||null,updatedBy:currentUser.role==='admin'?(s.updatedBy||null):null}})(),
-    transport:publicTransportConfig(cfg,currentUser),
     modules:publicModules(cfg,currentUser),
     push:{publicKey:hasPermission(currentUser,'notificationsReceive')?VAPID_PUBLIC_KEY:''},
   };
@@ -763,9 +685,8 @@ async function publicAdminState(cfg,recs){
     allCars:cfg.cars,
     dashboard:dashboard(cfg,recs),
     audit:audit.slice(0,200),
-    notificationLog:notifications.slice(0,150).map((raw)=>{const n=normalizeNotificationRecord(raw);return {...n,carPlate:n.carId?(carById[n.carId]?.plate||''):''}}),
+    notificationLog:notifications.filter((raw)=>!['traffic_alert','traffic_resolved'].includes(String(raw?.type||''))).slice(0,150).map((raw)=>{const n=normalizeNotificationRecord(raw);return {...n,carPlate:n.carId?(carById[n.carId]?.plate||''):''}}),
     notificationSettings:cfg.notificationSettings,
-    transportAdmin:{...cfg.transport,sourceConfigured:!!GOLEMIO_API_KEY,sourceName:'NDIC přes Golemio'},
     modulesAdmin:normalizeModules(cfg.modules),
   };
 }
@@ -798,164 +719,6 @@ function normalizePinChangeRequired(raw){
     requestedBy:raw.requestedBy||null,
     requestedById:raw.requestedById||null,
   };
-}
-
-function normalizedTrafficText(v) {
-  return String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-}
-function trafficTypeLabel(type) {
-  const t=String(type||'').toLowerCase();
-  if(t.includes('accident'))return 'Dopravní nehoda';
-  if(t.includes('maintenance')||t.includes('construction')||t.includes('roadwork'))return 'Práce na komunikaci';
-  if(t.includes('vehicle'))return 'Překážka / vozidlo';
-  if(t.includes('obstruction'))return 'Překážka v provozu';
-  if(t.includes('abnormaltraffic')||t.includes('congestion'))return 'Dopravní komplikace';
-  if(t.includes('weather')||t.includes('environment'))return 'Podmínky ovlivňující provoz';
-  return type ? String(type).replace(/([a-z])([A-Z])/g,'$1 $2') : 'Dopravní omezení';
-}
-function trafficSeverity(record) {
-  const impact=record?.impact||{}, delay=Number(impact?.delays?.timeValue||0)/60;
-  const capacity=impact?.capacityRemaining, lanes=Number(impact?.numberOfOperationalLanes);
-  const type=String(record?.type||'').toLowerCase();
-  if(capacity===0||lanes===0||delay>=20||type.includes('roadclosure'))return 'critical';
-  if(type.includes('accident')||delay>=8||Number(impact?.numberOfLanesRestricted||0)>0)return 'critical';
-  return 'significant';
-}
-function trafficSeverityRank(v){return v==='critical'?2:v==='significant'?1:0}
-function extractGolemioTrafficEvents(data) {
-  const pub=data?.situationPublicationLight||data?.situationPublication||{};
-  const situations=Array.isArray(pub.situation)?pub.situation:(Array.isArray(pub.situations)?pub.situations:[]);
-  const out=[];
-  for(const s of situations){
-    const records=Array.isArray(s?.situationRecord)?s.situationRecord:[];
-    records.forEach((r,idx)=>{
-      const comment=r?.generalPublicComment||{};
-      const text=cleanText(comment.cs||comment.en||comment.de||trafficTypeLabel(r?.type),500);
-      const delayMinutes=Math.max(0,Math.round(Number(r?.impact?.delays?.timeValue||0)/60));
-      const lanesRestricted=Math.max(0,Number(r?.impact?.numberOfLanesRestricted||0));
-      const severity=trafficSeverity(r);
-      const id=cleanText(String(s?.id||'event')+':'+String(idx),180);
-      const fingerprint=crypto.createHash('sha1').update(JSON.stringify([r?.type,text,delayMinutes,lanesRestricted,r?.endTime,r?.situationRecordVersionTime])).digest('hex').slice(0,16);
-      out.push({
-        id, fingerprint, type:String(r?.type||''), typeLabel:trafficTypeLabel(r?.type), text,
-        severity, delayMinutes, lanesRestricted,
-        startTime:r?.startTime||null, endTime:r?.endTime||null,
-        updatedAt:r?.situationRecordVersionTime||r?.situationRecordCreationTime||null,
-        sourceName:cleanText(r?.sourceName||'NDIC',60),
-      });
-    });
-  }
-  return out.slice(0,10000);
-}
-function eventMatchesCorridor(event,corridor) {
-  const hay=normalizedTrafficText([event.text,event.typeLabel,event.type,event.sourceName].join(' '));
-  return (corridor.matchTerms||[]).some((term)=>hay.includes(normalizedTrafficText(term)));
-}
-async function trafficFeed(cfg, force=false) {
-  const t=normalizeTransportConfig(cfg.transport);
-  const maxAge=t.cacheMinutes*60000;
-  const cache=await readJson('traffic-cache.json',null);
-  if(!force&&cache?.fetchedAt&&Date.now()-new Date(cache.fetchedAt).getTime()<maxAge)return cache;
-  if(!GOLEMIO_API_KEY)return { sourceConfigured:false, source:'NDIC přes Golemio', fetchedAt:cache?.fetchedAt||null, stale:false, error:'GOLEMIO_NOT_CONFIGURED', events:[] };
-  try{
-    const u=new URL('https://api.golemio.cz/v2/traffic/restrictions');
-    u.searchParams.set('moment',new Date().toISOString());
-    u.searchParams.set('limit','10000');
-    const r=await fetch(u,{headers:{accept:'application/json','X-Access-Token':GOLEMIO_API_KEY},signal:AbortSignal.timeout(15000)});
-    if(!r.ok)throw new Error('GOLEMIO_'+r.status);
-    const raw=await r.json();
-    const result={ sourceConfigured:true, source:'NDIC přes Golemio', fetchedAt:new Date().toISOString(), stale:false, error:null, events:extractGolemioTrafficEvents(raw) };
-    await writeJson('traffic-cache.json',result);
-    return result;
-  }catch(err){
-    console.error('traffic feed',err?.message);
-    const forbidden=err?.message==='GOLEMIO_403';
-    const unauthorized=err?.message==='GOLEMIO_401';
-    const error=forbidden?'SOURCE_FORBIDDEN':unauthorized?'SOURCE_UNAUTHORIZED':'SOURCE_TEMPORARILY_UNAVAILABLE';
-    if(cache?.events?.length&&!forbidden&&!unauthorized)return {...cache,sourceConfigured:true,stale:true,error};
-    return { sourceConfigured:true, source:'NDIC přes Golemio', fetchedAt:null, stale:false, error, events:[] };
-  }
-}
-async function buildTrafficReport(cfg, force=false) {
-  const t=normalizeTransportConfig(cfg.transport);
-  const feed=await trafficFeed(cfg,force);
-  const corridors=t.corridors.filter((x)=>x.active).map((corridor)=>{
-    const events=feed.events.filter((event)=>eventMatchesCorridor(event,corridor)).map((event)=>({...event,corridorIds:[corridor.id]}));
-    const critical=events.filter((x)=>x.severity==='critical').length;
-    return {
-      id:corridor.id,name:corridor.name,type:corridor.type,description:corridor.description,notifyAllowed:corridor.notifyAllowed,
-      status:(!feed.sourceConfigured||feed.error)?'unknown':critical?'critical':events.length?'warning':'clear',
-      eventCount:events.length,criticalCount:critical,
-      summary:!feed.sourceConfigured?'Datový zdroj čeká na připojení.':feed.error==='SOURCE_FORBIDDEN'?'API klíč nemá oprávnění k dopravnímu zdroji.':feed.error?'Dopravní data momentálně nejsou dostupná.':events[0]?.text||'Bez hlášených omezení.',
-      events,
-    };
-  });
-  const byId=new Map();
-  for(const corridor of corridors)for(const ev of corridor.events){
-    const old=byId.get(ev.id);
-    if(old)old.corridorIds=[...new Set([...old.corridorIds,...ev.corridorIds])];
-    else byId.set(ev.id,{...ev});
-  }
-  const events=[...byId.values()].sort((a,b)=>trafficSeverityRank(b.severity)-trafficSeverityRank(a.severity)||String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
-  return {
-    sourceConfigured:feed.sourceConfigured, source:feed.source, fetchedAt:feed.fetchedAt, stale:!!feed.stale, error:feed.error||null,
-    corridors, events,
-    summary:{
-      clear:corridors.filter((x)=>x.status==='clear').length,
-      warning:corridors.filter((x)=>x.status==='warning').length,
-      critical:corridors.filter((x)=>x.status==='critical').length,
-      unknown:corridors.filter((x)=>x.status==='unknown').length,
-    },
-  };
-}
-function selectedTrafficEvents(report,prefs,cfg) {
-  const selected=new Set(prefs.corridorIds||[]);
-  const allowed=new Set(normalizeTransportConfig(cfg.transport).corridors.filter((x)=>x.active&&x.notifyAllowed).map((x)=>x.id));
-  const min=prefs.severity==='critical'?2:prefs.severity==='significant'?1:0;
-  return report.events.filter((event)=>trafficSeverityRank(event.severity)>=min&&event.corridorIds.some((id)=>selected.has(id)&&allowed.has(id)));
-}
-async function maybeNotifyTrafficUser(cfg,user,report) {
-  const t=normalizeTransportConfig(cfg.transport),prefs=normalizeTransportPrefs(user.transportPrefs,t);
-  if(!t.notificationsEnabled||!prefs.notificationsEnabled||!hasPermission(user,'notificationsReceive')||!report.sourceConfigured||report.error)return {sent:0};
-  const state=await readJson('traffic-notification-state.json',{users:{}});
-  state.users ||= {};
-  const us=state.users[user.id]||{events:{}};
-  us.events ||= {};
-  const active=selectedTrafficEvents(report,prefs,cfg),reportEventIds=new Set((report.events||[]).map((x)=>x.id));
-  let sent=0;
-  const now=Date.now(),repeatMs=prefs.repeatMinutes*60000;
-  const corridorNames=Object.fromEntries(report.corridors.map((x)=>[x.id,x.name]));
-  for(const event of active){
-    const prev=us.events[event.id]||{};
-    const changed=!!prev.fingerprint&&prev.fingerprint!==event.fingerprint;
-    const due=prefs.repeatMode==='interval'&&prev.lastSentAt&&now-prev.lastSentAt>=repeatMs;
-    const should=!prev.lastSentAt||(prefs.repeatMode==='change'&&changed)||(prefs.repeatMode==='interval'&&(changed||due));
-    const firstCorridor=event.corridorIds.find((id)=>prefs.corridorIds.includes(id))||event.corridorIds[0];
-    const corridorName=corridorNames[firstCorridor]||'Dopravní report';
-    if(should){
-      const extra=[event.delayMinutes?('zdržení cca '+event.delayMinutes+' min'):'',event.lanesRestricted?('omezené pruhy: '+event.lanesRestricted):''].filter(Boolean).join(' · ');
-      const body=cleanText(event.text+(extra?' · '+extra:''),240);
-      const n=await createNotification({type:'traffic_alert',title:'🚦 Doprava – '+corridorName,body,recipient:'user',recipientUserIds:[user.id],byUserId:'system',byUserName:'Dopravní report',transportCorridorIds:event.corridorIds});
-      const result=await sendPushToUsers(cfg,[user.id],{title:n.title,body:n.body,tag:'traffic-'+event.id,url:'/?module=transport&notification='+encodeURIComponent(n.id)});
-      await patchNotification(n.id,result);
-      prev.lastSentAt=now;prev.resolvedSent=false;prev.corridorName=corridorName;prev.lastText=event.text;sent+=result.sent||0;
-    }
-    prev.fingerprint=event.fingerprint;prev.lastSeenAt=now;us.events[event.id]=prev;
-  }
-  if(prefs.resolved&&!report.stale){
-    for(const [id,prev] of Object.entries(us.events)){
-      if(reportEventIds.has(id)||!prev.lastSentAt||prev.resolvedSent)continue;
-      if(now-Number(prev.lastSeenAt||0)>12*60*60*1000)continue;
-      const title='✅ Doprava – omezení ukončeno';
-      const body=cleanText((prev.corridorName||'Sledovaný úsek')+': předchozí omezení už není v aktuálním dopravním reportu.',240);
-      const n=await createNotification({type:'traffic_resolved',title,body,recipient:'user',recipientUserIds:[user.id],byUserId:'system',byUserName:'Dopravní report'});
-      const result=await sendPushToUsers(cfg,[user.id],{title,body,tag:'traffic-resolved-'+id,url:'/?module=transport&notification='+encodeURIComponent(n.id)});
-      await patchNotification(n.id,result);prev.resolvedSent=true;sent+=result.sent||0;
-    }
-  }
-  for(const [id,prev] of Object.entries(us.events))if(now-Number(prev.lastSeenAt||0)>7*86400000)delete us.events[id];
-  state.users[user.id]=us;await writeJson('traffic-notification-state.json',state);
-  return {sent};
 }
 
 async function sendPushToUsers(cfg, userIds, payload) {
@@ -1124,7 +887,7 @@ export default async function handler(req, res) {
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
       return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
     }
-    const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs','trafficReport']);
+    const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
@@ -1436,22 +1199,6 @@ export default async function handler(req, res) {
     }
 
 
-    if (body.action === 'trafficReport') {
-      if (cfg.transport?.enabled === false && currentUser.role !== 'admin') return json(res, 403, { error: 'TRAFFIC_DISABLED' });
-      const report = await buildTrafficReport(cfg, false);
-      const allowAlerts = currentUser.role === 'admin' || sys.mode !== 'read_only';
-      const alertResult = allowAlerts ? await maybeNotifyTrafficUser(cfg, currentUser, report) : { sent: 0, skipped: 'read_only' };
-      return json(res, 200, { ...report, alertResult });
-    }
-
-    if (body.action === 'saveTransportPrefs') {
-      if (currentUser.role !== 'admin' && normalizeTransportConfig(cfg.transport).userSettingsVisible === false) return json(res,403,{error:'TRAFFIC_PREFS_HIDDEN',message:'Nastavení Dopravního reportu je administrátorem skryté.'});
-      currentUser.transportPrefs = normalizeTransportPrefs(body.prefs, cfg.transport);
-      await writeConfig(cfg);
-      await appendAudit(currentUser, 'transport_prefs', 'Upraveno osobní nastavení Dopravního reportu', currentUser.transportPrefs);
-      return json(res, 200, { ok:true, prefs:currentUser.transportPrefs });
-    }
-
     if (body.action === 'notificationRespond') {
       const notificationId = String(body.notificationId || '');
       const response = String(body.response || '');
@@ -1690,62 +1437,6 @@ export default async function handler(req, res) {
       await writeConfig(cfg);
       await appendAudit(currentUser,'module_settings','Upraveno zobrazení a dostupnost modulů',{before,after:next});
       return json(res,200,{ok:true,modulesAdmin:next});
-    }
-
-    if (body.action === 'adminSaveTransportSettings') {
-      const s=body.settings||{};
-      cfg.transport = normalizeTransportConfig({
-        ...cfg.transport,
-        enabled: s.enabled !== false,
-        notificationsEnabled: s.notificationsEnabled !== false,
-        userSettingsVisible: s.userSettingsVisible !== false,
-        cacheMinutes: s.cacheMinutes,
-        pollMinutes: s.pollMinutes,
-      });
-      await writeConfig(cfg);
-      await appendAudit(currentUser,'transport_settings','Upraveno nastavení Dopravního reportu',{enabled:cfg.transport.enabled,notificationsEnabled:cfg.transport.notificationsEnabled,userSettingsVisible:cfg.transport.userSettingsVisible,cacheMinutes:cfg.transport.cacheMinutes,pollMinutes:cfg.transport.pollMinutes});
-      return json(res,200,{ok:true,transportAdmin:{...cfg.transport,sourceConfigured:!!GOLEMIO_API_KEY,sourceName:'NDIC přes Golemio'}});
-    }
-
-    if (body.action === 'adminAddTransportCorridor') {
-      const name=cleanText(body.name,80);
-      if(!name)return json(res,400,{error:'NAME'});
-      const terms=[...new Set(String(body.matchTerms||'').split(',').map((x)=>cleanText(x,60)).filter(Boolean))].slice(0,30);
-      if(!terms.length)return json(res,400,{error:'TRAFFIC_TERMS'});
-      cfg.transport=normalizeTransportConfig(cfg.transport);
-      const corridor={id:uid('tr'),name,type:body.type==='area'?'area':'route',active:true,notifyAllowed:true,description:cleanText(body.description,180),matchTerms:terms};
-      cfg.transport.corridors.push(corridor);await writeConfig(cfg);
-      await appendAudit(currentUser,'transport_corridor_add','Přidán sledovaný dopravní úsek '+name,corridor);
-      return json(res,200,{ok:true,corridor});
-    }
-
-    if (body.action === 'adminUpdateTransportCorridor') {
-      cfg.transport=normalizeTransportConfig(cfg.transport);
-      const x=cfg.transport.corridors.find((row)=>row.id===String(body.id||''));
-      if(!x)return json(res,404,{error:'TRAFFIC_CORRIDOR'});
-      const before={...x,matchTerms:[...x.matchTerms]};
-      if(body.name!==undefined)x.name=cleanText(body.name,80)||x.name;
-      if(body.description!==undefined)x.description=cleanText(body.description,180);
-      if(body.type!==undefined)x.type=body.type==='area'?'area':'route';
-      if(typeof body.active==='boolean')x.active=body.active;
-      if(typeof body.notifyAllowed==='boolean')x.notifyAllowed=body.notifyAllowed;
-      if(body.matchTerms!==undefined){
-        const terms=[...new Set((Array.isArray(body.matchTerms)?body.matchTerms:String(body.matchTerms||'').split(',')).map((v)=>cleanText(v,60)).filter(Boolean))].slice(0,30);
-        if(terms.length)x.matchTerms=terms;
-      }
-      await writeConfig(cfg);
-      await appendAudit(currentUser,'transport_corridor_edit','Upraven sledovaný dopravní úsek '+x.name,{before,after:x});
-      return json(res,200,{ok:true,corridor:x});
-    }
-
-    if (body.action === 'adminDeleteTransportCorridor') {
-      cfg.transport=normalizeTransportConfig(cfg.transport);
-      const id=String(body.id||''),x=cfg.transport.corridors.find((row)=>row.id===id);
-      if(!x)return json(res,404,{error:'TRAFFIC_CORRIDOR'});
-      cfg.transport.corridors=cfg.transport.corridors.filter((row)=>row.id!==id);
-      await writeConfig(cfg);
-      await appendAudit(currentUser,'transport_corridor_delete','Odstraněn sledovaný dopravní úsek '+x.name,x);
-      return json(res,200,{ok:true});
     }
 
     if (body.action === 'adminSetSystemMode') {
@@ -2016,7 +1707,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminBackup') {
       const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 7, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg), transport: cfg.transport, modules: normalizeModules(cfg.modules) });
+      return json(res, 200, { version: 8, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications: notifications.filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n?.type||''))), notificationSettings: cfg.notificationSettings, system: systemState(cfg), modules: normalizeModules(cfg.modules) });
     }
 
     return json(res, 400, { error: 'ACTION' });
