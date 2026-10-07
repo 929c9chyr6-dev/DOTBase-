@@ -190,7 +190,8 @@ async function loadFleetData(force=false){
 async function loadTaskData(force=false){
   if(!force&&dataFresh('tiretask'))return;
   const r=await api('taskData');Object.assign(D,r);dataLoadedAt.tiretask=Date.now();
-  D.myTaskSummary=(D.tireTasks||[]).filter((t)=>t.assignedToUserId===me?.id&&t.status!=='closed').slice(0,8);
+  const mine=(D.tireTasks||[]).filter((t)=>t.assignedToUserId===me?.id&&t.status!=='closed');
+  D.myTaskSummary=mine.slice(0,8);D.myTaskCount=mine.length;
   renderTireTask();renderHomePulse();renderHomeAssignedTasks();
 }
 async function loadNotificationData(force=false){
@@ -710,7 +711,7 @@ function renderHomeAssignedTasks(){
   const card=$('homeMyTasks'),list=$('homeMyTasksList');if(!card||!list)return;
   const rows=(D.myTaskSummary||[]).filter((t)=>t.status!=='closed').slice().sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')));
   card.hidden=!rows.length;if(!rows.length)return;
-  $('homeMyTasksCount').textContent=String(rows.length);
+  $('homeMyTasksCount').textContent=String(Number(D.myTaskCount??rows.length));
   list.innerHTML=rows.slice(0,4).map((t)=>{
     const sm=myTaskStatusMeta(t),season=t.targetSeason==='winter'?'❄️ Zimní':'☀️ Letní';
     return '<button class="home-task-row" data-home-task="'+e(t.id)+'"><span class="home-task-main"><span class="home-task-title">'+e(t.carPlate||'—')+' · '+season+'</span><span class="home-task-meta">'+e(taskDateLabel(t))+' · '+tireTaskTimeLabel(t)+(t.carName?' · '+e(t.carName):'')+'</span></span><span class="home-task-status">'+sm.icon+' '+sm.label+'</span></button>';
@@ -724,7 +725,7 @@ function clearTaskUrl(){
 }
 function openSpecificTask(id){
   if(!id)return;openModule('tiretask');
-  loadTaskData(false).then(()=>{
+  loadTaskData(true).then(()=>{
     const esc=CSS.escape(id),el=document.querySelector('.my-task-card[data-my-task-id="'+esc+'"]')||document.querySelector('.tiretask-card[data-task-id="'+esc+'"]');
     if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('flash-focus');setTimeout(()=>el.classList.remove('flash-focus'),1900)}
     clearTaskUrl();
@@ -1470,7 +1471,7 @@ if($('globalSearchClose'))$('globalSearchClose').onclick=closeGlobalSearch;
 if($('globalSearchInput'))$('globalSearchInput').oninput=()=>{if(globalSearchTimer)clearTimeout(globalSearchTimer);globalSearchTimer=setTimeout(renderGlobalSearch,250)};
 if($('globalSearchOverlay'))$('globalSearchOverlay').onclick=e=>{if(e.target===$('globalSearchOverlay'))closeGlobalSearch()};
 if($('headerNotifications'))$('headerNotifications').onclick=()=>openModule('notifications');
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('globalSearchOverlay')?.hidden)closeGlobalSearch();if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'&&tok){e.preventDefault();openGlobalSearch()}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('taskProblemOverlay')?.hidden)closeTaskProblem();if(e.key==='Escape'&&!$('globalSearchOverlay')?.hidden)closeGlobalSearch();if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'&&tok){e.preventDefault();openGlobalSearch()}});
 document.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>openModule(b.dataset.module));
 document.querySelectorAll('.back-home').forEach(b=>b.onclick=()=>openModule('home'));if($('homeAttention'))$('homeAttention').onclick=()=>{openModule('pneu');if(allowedTab('fleet'))showTab('fleet')};
 document.querySelectorAll('.admin-nav-btn').forEach(b=>b.onclick=()=>{document.querySelectorAll('.admin-nav-btn').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.admin-pane').forEach(p=>p.classList.toggle('active',p.id==='admin-'+b.dataset.admin))});
