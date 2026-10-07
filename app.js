@@ -61,7 +61,7 @@ async function loadLoginUsers(){
   try{
     const r=await api('loginUsers');loginUsers=r.users||[];
     const selected=localStorage.getItem('lastLoginUserId')||'';
-    $('loginUser').innerHTML='<option value="">Vyber uživatele…</option>'+loginUsers.map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
+    $('loginUser').innerHTML='<option value="">Vyber uživatele…</option>'+loginUsers.map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+'</option>').join('');
     if(loginUsers.some(u=>u.id===selected))$('loginUser').value=selected;
     updateLoginResetOption();
   }catch{$('loginUser').innerHTML='<option value="">Uživatele se nepodařilo načíst</option>';updateLoginResetOption()}
