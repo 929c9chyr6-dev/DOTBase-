@@ -225,6 +225,22 @@ function cleanVin(v) {
 function cleanText(v, max = 100) {
   return String(v || '').trim().slice(0, max);
 }
+const DEFAULT_VEHICLE_CATEGORIES = ['VIP','MANAŽER','POOL','TECHNICI','ÚDRŽBA','FOLLOW','AUTOPROVOZ','BMS'];
+function cleanVehicleCategory(v) {
+  return cleanText(v, 40).replace(/\s+/g,' ').toUpperCase();
+}
+function normalizeVehicleCategories(raw, cars = []) {
+  const out = [], seen = new Set();
+  const add = (value) => {
+    const name = cleanVehicleCategory(value);
+    if (!name || seen.has(name)) return;
+    seen.add(name); out.push(name);
+  };
+  DEFAULT_VEHICLE_CATEGORIES.forEach(add);
+  (Array.isArray(raw) ? raw : []).forEach(add);
+  (Array.isArray(cars) ? cars : []).forEach((c)=>add(c?.category));
+  return out;
+}
 function uid(prefix = '') {
   return prefix + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
 }
@@ -243,9 +259,10 @@ async function writeJson(path, value) {
 }
 function normalizeConfig(cfg) {
   cfg ||= {};
-  cfg.version = 9;
+  cfg.version = 10;
   cfg.users ||= [];
   cfg.cars ||= [];
+  cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
   cfg.system = systemState(cfg);
   cfg.transport = normalizeTransportConfig(cfg.transport);
@@ -268,6 +285,8 @@ function normalizeConfig(cfg) {
     if (!c.createdAt) c.createdAt = null;
     if (!c.updatedAt) c.updatedAt = null;
     c.vin = cleanVin(c.vin || '');
+    c.category = cleanVehicleCategory(c.category || '');
+    if (c.category && !cfg.vehicleCategories.includes(c.category)) cfg.vehicleCategories.push(c.category);
     if (!c.lastModifiedAt) c.lastModifiedAt = c.updatedAt || c.createdAt || null;
     if (!c.lastModifiedBy) c.lastModifiedBy = '';
     if (!c.lastModifiedById) c.lastModifiedById = null;
@@ -461,6 +480,7 @@ function buildVehicleOverview(cfg, recs) {
       plate: car.plate,
       name: car.name || '',
       vin: car.vin || '',
+      category: car.category || '',
       active: car.active !== false,
       createdAt: car.createdAt || null,
       updatedAt: car.updatedAt || null,
@@ -492,7 +512,7 @@ async function buildVehicleDetail(cfg, recs, carId) {
     id: a.id, createdAt: a.createdAt, actorName: a.actorName, action: a.action, summary: a.summary,
   }));
   return {
-    car: { id: car.id, plate: car.plate, name: car.name, vin: car.vin || '', active: car.active !== false, createdAt: car.createdAt, updatedAt: car.updatedAt, lastModifiedAt: car.lastModifiedAt || null, lastModifiedBy: car.lastModifiedBy || '' },
+    car: { id: car.id, plate: car.plate, name: car.name, vin: car.vin || '', category: car.category || '', active: car.active !== false, createdAt: car.createdAt, updatedAt: car.updatedAt, lastModifiedAt: car.lastModifiedAt || null, lastModifiedBy: car.lastModifiedBy || '' },
     latest: enriched[0] || null,
     latestSummer: enriched.find((r) => r.season === 'summer') || null,
     latestWinter: enriched.find((r) => r.season === 'winter') || null,
@@ -578,6 +598,7 @@ async function publicState(cfg, recs, currentUser) {
   const base = {
     me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
     permissions: perms,
+    vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
     cars: cfg.cars.filter((c) => c.active !== false),
     vehicleOverview: buildVehicleOverview(cfg, recs),
     tireTasks: (currentUser.role==='admin'||(moduleState(cfg,'tiretask').visible&&moduleState(cfg,'tiretask').online)) ? publicTireTasks(cfg,tireTaskRows) : [],
@@ -1300,11 +1321,12 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'adminAddCar') {
-      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80), vin = cleanVin(body.vin);
+      const plate = cleanPlate(body.plate), name = cleanText(body.name, 80), vin = cleanVin(body.vin), category = cleanVehicleCategory(body.category);
       if (!plate) return json(res, 400, { error: 'PLATE' });
+      if (!category || !cfg.vehicleCategories.includes(category)) return json(res, 400, { error: 'VEHICLE_CATEGORY' });
       if (cfg.cars.some((c) => c.plate === plate)) return json(res, 409, { error: 'DUPLICATE' });
       const now = new Date().toISOString();
-      const car = { id: uid('c'), plate, name, vin, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id };
+      const car = { id: uid('c'), plate, name, vin, category, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id };
       cfg.cars.push(car); await writeConfig(cfg);
       await appendAudit(currentUser, 'car_add', `Přidáno auto ${plate} ${name}`, car);
       return json(res, 200, { ok: true });
@@ -1314,13 +1336,37 @@ export default async function handler(req, res) {
       const car = cfg.cars.find((c) => c.id === body.carId);
       if (!car) return json(res, 404, { error: 'CAR' });
       const plate = cleanPlate(body.plate), name = cleanText(body.name, 80), vin = cleanVin(body.vin);
+      const category = body.category === undefined ? (car.category || '') : cleanVehicleCategory(body.category);
       if (!plate) return json(res, 400, { error: 'PLATE' });
+      if (category && !cfg.vehicleCategories.includes(category)) return json(res, 400, { error: 'VEHICLE_CATEGORY' });
       if (cfg.cars.some((c) => c.id !== car.id && c.plate === plate)) return json(res, 409, { error: 'DUPLICATE' });
-      const before = { plate: car.plate, name: car.name, vin: car.vin || '' };
-      car.plate = plate; car.name = name; car.vin = vin; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt);
+      const before = { plate: car.plate, name: car.name, vin: car.vin || '', category: car.category || '' };
+      car.plate = plate; car.name = name; car.vin = vin; car.category = category; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt);
       await writeConfig(cfg);
-      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { carId: car.id, before, after: { carId: car.id, plate, name, vin } });
+      await appendAudit(currentUser, 'car_edit', `Upraveno auto ${before.plate} → ${plate}`, { carId: car.id, before, after: { carId: car.id, plate, name, vin, category } });
       return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'adminSetCarCategory') {
+      const car = cfg.cars.find((c) => c.id === body.carId);
+      if (!car) return json(res, 404, { error: 'CAR' });
+      const category = cleanVehicleCategory(body.category);
+      if (!category || !cfg.vehicleCategories.includes(category)) return json(res, 400, { error: 'VEHICLE_CATEGORY' });
+      const before = car.category || '';
+      car.category = category; car.updatedAt = new Date().toISOString(); touchCar(car, currentUser, car.updatedAt);
+      await writeConfig(cfg);
+      await appendAudit(currentUser, 'car_category', `Kategorie vozidla ${car.plate}: ${before || 'bez kategorie'} → ${category}`, { carId:car.id, before, after:category });
+      return json(res, 200, { ok:true, category });
+    }
+
+    if (body.action === 'adminAddVehicleCategory') {
+      const category = cleanVehicleCategory(body.category);
+      if (!category) return json(res, 400, { error:'VEHICLE_CATEGORY' });
+      if (cfg.vehicleCategories.includes(category)) return json(res, 409, { error:'VEHICLE_CATEGORY_DUPLICATE' });
+      cfg.vehicleCategories.push(category);
+      await writeConfig(cfg);
+      await appendAudit(currentUser, 'vehicle_category_add', `Přidána kategorie vozidel ${category}`, { category });
+      return json(res, 200, { ok:true, vehicleCategories:cfg.vehicleCategories });
     }
 
     if (body.action === 'adminSetCarActive') {
@@ -1349,8 +1395,10 @@ export default async function handler(req, res) {
       const now = new Date().toISOString();
       for (const row of rows) {
         const plate = cleanPlate(row?.plate), name = cleanText(row?.name, 80), vin = cleanVin(row?.vin);
+        const requestedCategory = cleanVehicleCategory(row?.category);
+        const category = requestedCategory && cfg.vehicleCategories.includes(requestedCategory) ? requestedCategory : '';
         if (!plate || existing.has(plate)) { skipped++; continue; }
-        cfg.cars.push({ id: uid('c'), plate, name, vin, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id });
+        cfg.cars.push({ id: uid('c'), plate, name, vin, category, active: true, createdAt: now, updatedAt: now, lastModifiedAt: now, lastModifiedBy: currentUser.name, lastModifiedById: currentUser.id });
         existing.add(plate); added++;
       }
       await writeConfig(cfg);
@@ -1482,7 +1530,7 @@ export default async function handler(req, res) {
     if (body.action === 'adminBackup') {
       const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 6, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg), transport: cfg.transport, modules: normalizeModules(cfg.modules) });
+      return json(res, 200, { version: 7, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications, notificationSettings: cfg.notificationSettings, system: systemState(cfg), transport: cfg.transport, modules: normalizeModules(cfg.modules) });
     }
 
     return json(res, 400, { error: 'ACTION' });
