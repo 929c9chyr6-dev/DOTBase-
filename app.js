@@ -69,10 +69,15 @@ $('lock').onclick=()=>lockApp();
 async function refresh(){try{D=await api('state');if(D.me)me=D.me;render()}catch(x){if(x.code==='AUTH')lockApp();else if(x.code==='MAINTENANCE')lockApp(errorText(x),'msg warn')}}
 
 function latest(id,s){return D.records.find(r=>r.carId===id&&(!s||r.season===s))}
+function prefillMileage(id){
+  const l=latest(id);
+  $('km').value=l?String(l.mileage):'';
+  valid();
+}
 function valid(){
   const d=$('dot').value.replace(/\D/g,'').slice(0,4),k=$('km').value.replace(/\D/g,'').slice(0,7);$('dot').value=d;$('km').value=k;
   $('save').disabled=!can('dotCreate')||!($('car').value&&season&&/^\d{4}$/.test(d)&&+d.slice(0,2)>=1&&+d.slice(0,2)<=53&&k!=='');
-  const l=latest($('car').value);$('kmHint').textContent=l?'Poslední evidovaný stav: '+Number(l.mileage).toLocaleString('cs-CZ')+' km.':'Aktuální stav tachometru v km.';
+  const l=latest($('car').value);$('kmHint').textContent=l?'Předvyplněno z posledního záznamu: '+Number(l.mileage).toLocaleString('cs-CZ')+' km — potvrď nebo uprav.':'Zatím bez předchozího záznamu. Zadej aktuální stav tachometru.';
 }
 $('dot').oninput=valid;$('km').oninput=valid;
 function recentKey(){return 'dotRecentCars:'+(me?.id||'guest')}
@@ -80,9 +85,9 @@ function getRecent(){try{return JSON.parse(localStorage.getItem(recentKey())||'[
 function renderRecent(){const ids=getRecent(),sel=$('car').value;$('recentCars').innerHTML=ids.length?ids.map(id=>{const c=D.cars.find(x=>x.id===id);return c?'<button class="recent-car '+(sel===id?'active':'')+'" data-id="'+e(c.id)+'"><b>'+e(c.plate)+'</b><br><span style="font-size:12px;font-weight:600">'+e(c.name||'')+'</span></button>':''}).join(''):'<div class="small">Zatím žádná.</div>';document.querySelectorAll('.recent-car').forEach(b=>b.onclick=()=>chooseCar(b.dataset.id))}
 function rememberCar(id){if(!id)return;try{localStorage.setItem(recentKey(),JSON.stringify([id,...getRecent().filter(x=>x!==id)].slice(0,4)))}catch{}renderRecent()}
 function renderCarOptions(sel=$('car').value){const q=carSearch.trim().toLocaleUpperCase('cs-CZ');let cars=D.cars.filter(c=>!q||(c.plate+' '+c.name).toLocaleUpperCase('cs-CZ').includes(q));const cur=D.cars.find(c=>c.id===sel);if(cur&&!cars.some(c=>c.id===cur.id))cars=[cur,...cars];$('car').innerHTML='<option value="">'+(cars.length?'Vyber auto…':'Žádné auto nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name)+'</option>').join('');if(cur)$('car').value=sel;renderRecent()}
-function chooseCar(id){if(!D.cars.some(c=>c.id===id))return;carSearch='';$('carSearch').value='';renderCarOptions(id);$('car').value=id;rememberCar(id);valid()}
+function chooseCar(id){if(!D.cars.some(c=>c.id===id))return;carSearch='';$('carSearch').value='';renderCarOptions(id);$('car').value=id;rememberCar(id);prefillMileage(id)}
 $('carSearch').oninput=()=>{carSearch=$('carSearch').value;renderCarOptions($('car').value)};
-$('car').onchange=()=>{rememberCar($('car').value);valid();renderRecent()};
+$('car').onchange=()=>{rememberCar($('car').value);prefillMileage($('car').value);renderRecent()};
 function setSeason(s){season=s;$('summer').classList.toggle('on',s==='summer');$('winter').classList.toggle('on',s==='winter');valid()}
 $('summer').onclick=()=>setSeason('summer');$('winter').onclick=()=>setSeason('winter');
 ['1','2','3','4','5','6','7','8','9','C','0','⌫'].forEach(k=>{const b=document.createElement('button');b.textContent=k;b.onclick=()=>{if(k==='C')$('dot').value='';else if(k==='⌫')$('dot').value=$('dot').value.slice(0,-1);else if($('dot').value.length<4)$('dot').value+=k;valid()};$('pad').append(b)});
@@ -532,7 +537,7 @@ function openPneuFromTireTask(id){
   const t=(D.tireTasks||[]).find(x=>x.id===id);if(!t)return;
   pendingTireTaskId=t.id;
   openModule('pneu');showTab('entry',false);
-  carSearch='';$('carSearch').value='';renderCarOptions(t.carId);$('car').value=t.carId;rememberCar(t.carId);setSeason(t.targetSeason);valid();
+  carSearch='';$('carSearch').value='';renderCarOptions(t.carId);$('car').value=t.carId;rememberCar(t.carId);prefillMileage(t.carId);setSeason(t.targetSeason);valid();
   note($('saveMsg'),'📋 Zápis bude propojen s TIRETASK '+(t.carPlate||'')+' · '+(t.targetSeason==='winter'?'zimní':'letní')+'.','msg');
 }
 
