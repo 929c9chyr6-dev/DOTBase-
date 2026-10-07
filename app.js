@@ -33,6 +33,7 @@ async function api(action,p={}){
   const j=await r.json().catch(()=>({error:'SERVER'}));
   if(!r.ok){
     const x=new Error(j.error);x.code=j.error;x.data=j;
+    if(j.error==='AUTH'&&tok){const msg=j.reason==='SESSION_REVOKED'?(j.message||'Relace byla ukončena administrátorem. Zadej svůj stávající PIN.'):'Přihlášení vypršelo. Zadej PIN znovu.';setTimeout(()=>{if(tok)lockApp(msg,'msg warn')},0)}
     if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp(j.message||'🔧 Probíhá technická údržba\nAplikace je dočasně pozastavena administrátorem.\nZkuste to prosím později.','msg warn'),0);
     if(j.error==='MODULE_OFFLINE'&&tok)setTimeout(()=>showModuleBlocked(j.module,j.message),0);
     if(j.error==='PIN_CHANGE_REQUIRED'&&tok&&action!=='changeOwnPin')setTimeout(()=>showPinChangeScreen({required:true,requireOldPin:j.requireOldPin!==false}),0);
@@ -1386,6 +1387,14 @@ if($('useSystemTemplate'))$('useSystemTemplate').onclick=()=>{
   if(SYSTEM_MESSAGE_TEMPLATES[mode])$('systemMessage').value=SYSTEM_MESSAGE_TEMPLATES[mode];
 };
 if($('useNormalTemplate'))$('useNormalTemplate').onclick=()=>{$('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE};
+if($('forceLogoutAll'))$('forceLogoutAll').onclick=async()=>{
+  if(!confirm('Vynutit odhlášení VŠECH uživatelů?\n\nOdhlásí se i tento Admin účet. PINy se nezmění a naposledy vybraný profil zůstane zapamatovaný. Každý pouze znovu zadá svůj stávající PIN.'))return;
+  $('forceLogoutAll').disabled=true;
+  try{
+    await api('adminForceLogoutAll');
+    lockApp('🚪 Všechny relace byly ukončeny. Přihlas se znovu svým stávajícím PINem.','msg warn');
+  }catch(x){note($('forceLogoutAllMsg'),errorText(x),'msg err');$('forceLogoutAll').disabled=false}
+};
 if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
   const mode=$('systemMode').value,message=$('systemMessage').value.trim();
   const returningToNormal=mode==='normal'&&(D.system?.mode||'normal')!=='normal';

@@ -224,12 +224,16 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 19;
+  cfg.version = 20;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
   cfg.notificationSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...(cfg.notificationSettings || {}) };
   cfg.system = systemState(cfg);
+  cfg.sessionGeneration = Math.max(0,Math.floor(Number(cfg.sessionGeneration)||0));
+  cfg.sessionRevokedAt = cfg.sessionRevokedAt || null;
+  cfg.sessionRevokedBy = cfg.sessionRevokedBy || '';
+  cfg.sessionRevokedById = cfg.sessionRevokedById || null;
   delete cfg.transport;
   cfg.modules = normalizeModules(cfg.modules);
   for (const u of cfg.users) {
@@ -835,7 +839,7 @@ export default async function handler(req, res) {
       if(u.role==='admin')return json(res,403,{error:'ADMIN_PIN_RESET'});
       const reset=normalizePinChangeRequired(u.pinChangeRequired);
       if(!reset?.required||reset.requireOldPin!==false)return json(res,403,{error:'PIN_RESET_NOT_AVAILABLE',message:'Pro tento účet není povolen reset bez stávajícího PINu.'});
-      const token=sign({uid:u.id,role:u.role,pinResetOnly:true,resetRequestedAt:reset.requestedAt,exp:Date.now()+15*60*1000});
+      const token=sign({uid:u.id,role:u.role,sg:cfg.sessionGeneration,pinResetOnly:true,resetRequestedAt:reset.requestedAt,exp:Date.now()+15*60*1000});
       return json(res,200,{token,user:{id:u.id,name:u.name,role:u.role},pinChangeRequired:reset});
     }
 
@@ -889,13 +893,14 @@ export default async function handler(req, res) {
       }
       u.lastLoginAt=new Date().toISOString();
       await writeConfig(cfg);
-      const token=sign({uid:u.id,role:u.role,exp:Date.now()+12*60*60*1000});
+      const token=sign({uid:u.id,role:u.role,sg:cfg.sessionGeneration,exp:Date.now()+12*60*60*1000});
       return json(res,200,{token,user:{id:u.id,name:u.name,role:u.role},pinChangeRequired:normalizePinChangeRequired(u.pinChangeRequired)});
     }
 
     const session = auth(req);
     if (!session) return json(res, 401, { error: 'AUTH' });
     const cfg = await readConfig();
+    if(Number(session.sg||0)!==Number(cfg.sessionGeneration||0))return json(res,401,{error:'AUTH',reason:'SESSION_REVOKED',message:'Relace byla ukončena administrátorem. Přihlas se znovu svým stávajícím PINem.'});
     const currentUser = cfg.users.find((x) => x.id === session.uid && x.active);
     if (!currentUser) return json(res, 401, { error: 'AUTH' });
 
@@ -925,7 +930,7 @@ export default async function handler(req, res) {
       currentUser.pinChangedAt=new Date().toISOString();
       await writeConfig(cfg);
       await appendAudit(currentUser,'user_pin_self_change','Uživatel si změnil PIN po výzvě administrátora',{userId:currentUser.id,resetRequest:resetBefore});
-      const token=sign({uid:currentUser.id,role:currentUser.role,exp:Date.now()+12*60*60*1000});
+      const token=sign({uid:currentUser.id,role:currentUser.role,sg:cfg.sessionGeneration,exp:Date.now()+12*60*60*1000});
       return json(res,200,{ok:true,token,user:{id:currentUser.id,name:currentUser.name,role:currentUser.role}});
     }
 
@@ -1475,6 +1480,15 @@ export default async function handler(req, res) {
 
     if (currentUser.role !== 'admin') return json(res, 403, { error: 'ADMIN' });
 
+    if (body.action === 'adminForceLogoutAll') {
+      const now=new Date().toISOString();
+      cfg.sessionGeneration=Math.max(0,Math.floor(Number(cfg.sessionGeneration)||0))+1;
+      cfg.sessionRevokedAt=now;cfg.sessionRevokedBy=currentUser.name;cfg.sessionRevokedById=currentUser.id;
+      await writeConfig(cfg);
+      await writePresence({});
+      await appendAudit(currentUser,'admin_force_logout_all','Vynuceno odhlášení všech uživatelů',{sessionGeneration:cfg.sessionGeneration,revokedAt:now});
+      return json(res,200,{ok:true,sessionGeneration:cfg.sessionGeneration,revokedAt:now});
+    }
 
     if (body.action === 'adminSaveModules') {
       const incoming = body.modules && typeof body.modules === 'object' ? body.modules : {};
