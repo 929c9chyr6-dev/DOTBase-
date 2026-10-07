@@ -59,7 +59,7 @@
 <button class="module-card" data-module="vehicleOverview"><span class="ico">🚗</span><span><b>PŘEHLED VOZIDEL</b><span class="small" style="display:block;margin-top:5px">Rychlý přehled všech vozidel a jejich aktuálních údajů.</span></span></button>
 <button class="module-card" data-module="service"><span class="ico">🔧</span><span><b>SERVIS</b><span class="small" style="display:block;margin-top:5px">Karty vozidel, servisní historie a plánování.</span></span></button>
 <button class="module-card" data-module="pneu"><span class="ico">🛞</span><span><b>PNEU / DOT</b><span class="small" style="display:block;margin-top:5px">DOT evidence, pneumatiky, kilometry a historie.</span></span></button>
-<button class="module-card" data-module="tiretask"><span class="ico">📋</span><span><b>TIRETASK</b><span class="small" style="display:block;margin-top:5px">Denní plán přezouvání, stav práce a poznámky týmu.</span></span></button>
+<button class="module-card" data-module="tiretask"><span class="ico">📋</span><span><b>TASK</b><span class="small" style="display:block;margin-top:5px">Denní plán přezouvání, stav práce a poznámky týmu.</span></span></button>
 <button class="module-card" data-module="transport"><span class="ico">🚦</span><span><b>DOPRAVA</b><span id="homeTrafficStatus" class="small" style="display:block;margin-top:5px">Dopravní report pro sledované úseky.</span></span></button>
 <button class="module-card" data-module="maintenance"><span class="ico">🧽</span><span><b>ÚDRŽBA</b><span class="small" style="display:block;margin-top:5px">Mytí, kapaliny, tlak pneu a běžná provozní péče.</span></span></button>
 <button class="module-card" data-module="notifications"><span class="ico">🔔</span><span><b>OZNÁMENÍ <span id="homeNotificationBadge" class="badge" hidden>0</span></b><span class="small" style="display:block;margin-top:5px">Provozní zprávy, Admin oznámení a historie.</span></span></button>
@@ -115,7 +115,7 @@
 
 <section id="season" class="panel">
 <div class="card season-hero">
-<div class="top"><div><div class="step">Sezónní přehled</div><div class="small">DOT zápis = skutečně přezuto. TIRETASK znamená pouze naplánovaný termín.</div></div><button id="seasonRefresh" class="secondary">↻</button></div>
+<div class="top"><div><div class="step">Sezónní přehled</div><div class="small">DOT zápis = skutečně přezuto. TASK znamená pouze naplánovaný termín.</div></div><button id="seasonRefresh" class="secondary">↻</button></div>
 <div class="filter-grid" style="margin-top:10px"><div><div class="filter-label">Sezóna</div><select id="seasonCampaign"></select></div><div><div class="filter-label">Skupina vozidel</div><select id="seasonCategory"><option value="">Všechny skupiny</option></select></div></div>
 <div class="filter-grid" style="margin-top:8px"><div><div class="filter-label">Stav</div><select id="seasonStatus"><option value="">Všechny stavy</option><option value="done">✅ Přezuto</option><option value="scheduled">📋 Naplánováno</option><option value="waiting">⏳ Bez termínu</option><option value="problem">⚠️ Problém</option></select></div><div><div class="filter-label">Hledání</div><div class="search-wrap" style="margin-bottom:0"><span class="search-icon">🔎</span><input id="seasonSearch" type="search" autocomplete="off" placeholder="SPZ, vozidlo, VIN…"></div></div></div>
 <div class="filter-actions"><button id="seasonClearFilters" class="clear-filters">✕ Vymazat filtry</button></div>
@@ -142,7 +142,7 @@
 </section>
 
 <section id="tiretask" class="module-screen">
-<div class="module-head"><div><h2>📋 TIRETASK</h2><div class="small">Plán přezouvání a průběh práce</div></div><button class="back-home">← Domů</button></div>
+<div class="module-head"><div><h2>📋 TASK</h2><div class="small">Plán přezouvání a průběh práce</div></div><button class="back-home">← Domů</button></div>
 
 <div id="tireTaskCreateCard" class="card">
 <h2>＋ Naplánovat přezutí</h2>
@@ -157,12 +157,12 @@
 </div>
 
 <div id="tireTaskMineCard" class="card" hidden>
-<div class="top"><div><h2 style="margin:0">👤 Moje úkoly ke zpracování</h2><div class="small">Aktivní TireTasky přiřazené přímo tobě.</div></div><span id="tireTaskMineCount" class="badge">0</span></div>
+<div class="top"><div><h2 style="margin:0">👤 Moje úkoly ke zpracování</h2><div class="small">Aktivní TASKy přiřazené přímo tobě.</div></div><span id="tireTaskMineCount" class="badge">0</span></div>
 <div id="tireTaskMineList"></div>
 </div>
 
 <div class="card">
-<div class="small" style="margin-bottom:8px">Aktivní TIRETASKy</div>
+<div class="small" style="margin-bottom:8px">Aktivní TASKy</div>
 <div id="tireTaskStats" class="tiretask-stats"></div>
 </div>
 
@@ -368,7 +368,7 @@
 
 <div id="admin-users" class="admin-pane">
 <div class="card"><h2>Přidat uživatele</h2><div class="row mobile-stack"><input id="newUserName" placeholder="Jméno"><input id="newUserPin" inputmode="numeric" maxlength="4" placeholder="PIN (4 čísla)" style="max-width:170px"><select id="newUserRole" style="max-width:180px"><option value="driver">Driver</option><option value="dispatch">Dispatch</option><option value="technician">Technician</option><option value="test">TEST</option></select></div><button id="addUser" class="primary" style="width:100%;margin-top:8px">＋ Přidat uživatele</button></div>
-<div class="card"><h2>Role, oprávnění a PINy</h2><div class="small">Admin už PIN uživatele přímo nemění ani negeneruje. Tlačítkem „Vyžádat změnu PINu“ pozastaví běžný přístup účtu a uživatel si po příštím přihlášení nastaví nový PIN sám. Admin má vždy plný systémový přístup. Dispatch, Driver a Technician mají základní oprávnění, která můžeš každému uživateli individuálně zapnout nebo vypnout. Role TEST začíná bez výchozích oprávnění a bez přístupu k modulům — vše jí povoluješ ručně — včetně přidávání vozidel/skupin, vytváření či editace TIRETASKů a odesílání provozních oznámení. Admin/systémová oznámení, PINy, audit a online stav zůstávají pouze Adminovi.</div><div id="users"></div></div>
+<div class="card"><h2>Role, oprávnění a PINy</h2><div class="small">Admin už PIN uživatele přímo nemění ani negeneruje. Tlačítkem „Vyžádat změnu PINu“ pozastaví běžný přístup účtu a uživatel si po příštím přihlášení nastaví nový PIN sám. Admin má vždy plný systémový přístup. Dispatch, Driver a Technician mají základní oprávnění, která můžeš každému uživateli individuálně zapnout nebo vypnout. Role TEST začíná bez výchozích oprávnění a bez přístupu k modulům — vše jí povoluješ ručně — včetně přidávání vozidel/skupin, vytváření či editace TASKů a odesílání provozních oznámení. Admin/systémová oznámení, PINy, audit a online stav zůstávají pouze Adminovi.</div><div id="users"></div></div>
 </div>
 
 <div id="admin-notify" class="admin-pane">

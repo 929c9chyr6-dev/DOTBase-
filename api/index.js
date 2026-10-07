@@ -117,13 +117,13 @@ function defaultSystemMessage(mode) {
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
 const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings'];
 const MODULE_LABELS = {
-  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TIRETASK', transport:'DOPRAVA', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
+  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TASK', transport:'DOPRAVA', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
 };
 const DEFAULT_MODULES = {
   vehicleOverview:{ visible:true, online:true, offlineMessage:'Přehled vozidel je dočasně mimo provoz.' },
   service:{ visible:true, online:true, offlineMessage:'Modul SERVIS je dočasně mimo provoz.' },
   pneu:{ visible:true, online:true, offlineMessage:'Modul PNEU / DOT je dočasně mimo provoz.' },
-  tiretask:{ visible:true, online:true, offlineMessage:'Modul TIRETASK je dočasně mimo provoz.' },
+  tiretask:{ visible:true, online:true, offlineMessage:'Modul TASK je dočasně mimo provoz.' },
   transport:{ visible:true, online:true, offlineMessage:'Dopravní report je dočasně mimo provoz.' },
   maintenance:{ visible:true, online:true, offlineMessage:'Modul ÚDRŽBA je dočasně mimo provoz.' },
   notifications:{ visible:true, online:true, offlineMessage:'Modul OZNÁMENÍ je dočasně mimo provoz.' },
@@ -1151,7 +1151,7 @@ export default async function handler(req, res) {
       await writeConfig(cfg);
       const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
       await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${recordDotSummary(r)} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
-      if(completedTask) await appendAudit(currentUser,'tiretask_auto_complete',`TIRETASK ${car.plate} automaticky označen jako hotový`,{taskId:completedTask.id,recordId:r.id});
+      if(completedTask) await appendAudit(currentUser,'tiretask_auto_complete',`TASK ${car.plate} automaticky označen jako hotový`,{taskId:completedTask.id,recordId:r.id});
       return json(res, 200, { ok: true, tireTaskCompleted:completedTask ? { id:completedTask.id } : null });
     }
 
@@ -1189,7 +1189,7 @@ export default async function handler(req, res) {
         closedAt:null,closedBy:null,closedById:null,problemNote:''
       }));
       const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TIRETASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
+      await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
       return json(res,200,{ok:true,batchId,count:created.length,tasks:publicTireTasks(cfg,created)});
     }
 
@@ -1221,7 +1221,7 @@ export default async function handler(req, res) {
         closedAt:null,closedBy:null,closedById:null,problemNote:''
       };
       const rows=await getTireTasks();rows.push(task);await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_create',`Vytvořen TIRETASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
+      await appendAudit(currentUser,'tiretask_create',`Vytvořen TASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1247,7 +1247,7 @@ export default async function handler(req, res) {
       if(body.instructions!==undefined)task.instructions=cleanText(body.instructions,700);
       const now=new Date().toISOString();task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'updated',at:now,userId:currentUser.id,userName:currentUser.name,text:'Plán úkolu upraven'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_update','Upraven TIRETASK',{taskId:task.id,before,after:{date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,assignedToUserId:task.assignedToUserId||null,instructions:task.instructions}});
+      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_update','Upraven TASK',{taskId:task.id,before,after:{date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,assignedToUserId:task.assignedToUserId||null,instructions:task.instructions}});
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1263,7 +1263,7 @@ export default async function handler(req, res) {
       task.comments=Array.isArray(task.comments)?task.comments:[];task.comments.push(comment);task.comments=task.comments.slice(-100);
       task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'comment',at:now,userId:currentUser.id,userName:currentUser.name,text:'Přidána poznámka'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_comment','Přidána poznámka k TIRETASK',{taskId:task.id,commentId:comment.id});
+      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_comment','Přidána poznámka k TASK',{taskId:task.id,commentId:comment.id});
       return json(res,200,{ok:true,comment});
     }
 
@@ -1280,7 +1280,7 @@ export default async function handler(req, res) {
       task.problemNote=status==='problem'?cleanText(body.problemNote,500):(status!=='problem'?'':task.problemNote||'');
       task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'status',at:now,userId:currentUser.id,userName:currentUser.name,text:status==='in_progress'?'Úkol rozpracován':status==='problem'?'Označeno jako problém':'Vráceno do plánovaných'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_status',`TIRETASK stav ${before} → ${status}`,{taskId:task.id,problemNote:task.problemNote});
+      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_status',`TASK stav ${before} → ${status}`,{taskId:task.id,problemNote:task.problemNote});
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1292,7 +1292,7 @@ export default async function handler(req, res) {
       if(task.status!=='completed')return json(res,409,{error:'TIRETASK_NOT_COMPLETED',message:'Úkol lze uzavřít až po propojeném PNEU/DOT zápisu.'});
       const now=new Date().toISOString();task.status='closed';task.closedAt=now;task.closedBy=currentUser.name;task.closedById=currentUser.id;task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
       task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'closed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Úkol uzavřen jako dokončený'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_close','TIRETASK uzavřen jako dokončený',{taskId:task.id});
+      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_close','TASK uzavřen jako dokončený',{taskId:task.id});
       return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
     }
 
@@ -1304,7 +1304,7 @@ export default async function handler(req, res) {
       const task=rows[idx],car=cfg.cars.find((x)=>x.id===task.carId);
       rows.splice(idx,1);
       await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_delete','Smazán TIRETASK '+(car?.plate||task.carId||'')+' · '+(task.date||''),{task});
+      await appendAudit(currentUser,'tiretask_delete','Smazán TASK '+(car?.plate||task.carId||'')+' · '+(task.date||''),{task});
       return json(res,200,{ok:true,id:task.id});
     }
 
