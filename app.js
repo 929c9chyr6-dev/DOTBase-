@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null;
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
 const MODULE_META={
@@ -9,11 +9,12 @@ const MODULE_META={
   tiretask:{label:'TIRETASK',icon:'📋'},
   transport:{label:'DOPRAVA',icon:'🚦'},
   maintenance:{label:'ÚDRŽBA',icon:'🧽'},
+  notifications:{label:'OZNÁMENÍ',icon:'🔔'},
   settings:{label:'NASTAVENÍ',icon:'⚙️'},
 };
 const MODULE_KEYS=Object.keys(MODULE_META);
-const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['vehicleAdd','Přidat vozidlo'],['vehicleCategoryAdd','Přidat skupinu vozidel'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['tireTaskCreate','Vytvořit task'],['tireTaskEdit','Editovat task'],['notificationsReceive','Přijímat oznámení']];
-const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','vehicleAdd','vehicleCategoryAdd','attentionEdit','tireTaskCreate','tireTaskEdit']);
+const PERMS=[['dotView','Vidět DOT údaje v přehledu aut'],['dotCreate','Zapisovat DOT'],['dotEdit','Upravovat DOT záznamy'],['dotDelete','Mazat DOT záznamy'],['fleetView','Vidět přehled aut'],['fleetExport','Exportovat přehled aut'],['historyView','Vidět historii'],['historyExport','Exportovat historii'],['vehicleDetail','Vidět detail vozidla (bez auditu)'],['vehicleAdd','Přidat vozidlo'],['vehicleCategoryAdd','Přidat skupinu vozidel'],['attentionView','Vidět upozornění Vyžaduje pozornost'],['attentionEdit','Upravovat z Vyžaduje pozornost'],['tireTaskCreate','Vytvořit task'],['tireTaskEdit','Editovat task'],['notificationsReceive','Přijímat oznámení'],['notificationsSendOperational','Odesílat provozní oznámení']];
+const WRITE_PERMS=new Set(['dotCreate','dotEdit','dotDelete','vehicleAdd','vehicleCategoryAdd','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsSendOperational']);
 function isReadOnly(){return me?.role!=='admin'&&D.system?.mode==='read_only'}
 function can(k){if(isReadOnly()&&WRITE_PERMS.has(k))return false;return me?.role==='admin'||!!D.permissions?.[k]}
 function roleLabel(r){return ROLE_LABELS[r]||r||'—'}
@@ -42,7 +43,7 @@ function downloadBlob(content,type,name){const blob=new Blob([content],{type}),u
 function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 2 číslice.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',TRAFFIC_TERMS:'Doplň alespoň jeden rozpoznávací název.',TRAFFIC_CORRIDOR:'Sledovaný úsek nebyl nalezen.',MODULE_OFFLINE:'Modul je dočasně offline.',TRAFFIC_DISABLED:'Dopravní report je momentálně vypnutý.',TRAFFIC_PREFS_HIDDEN:'Nastavení Dopravního reportu je administrátorem skryté.',TIRETASK:'Úkol TIRETASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
-  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;
+  tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;trafficReport=null;trafficLoading=false;lastTrafficLoad=0;trafficPrefsDirty=false;notificationView='all';toastNotificationId=null;if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
   if(message)note($('loginMsg'),message,cls);$('pin').focus();
 }
@@ -57,7 +58,7 @@ async function login(){
     const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
     if(tab==='admin')openModule('admin');
     else if(['entry','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
-    else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','settings','admin'].includes(mod))openModule(mod);
+    else if(['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
   }catch(x){
     const msg=x.code==='LOCKED'?'Příliš mnoho pokusů. Zkus to později.':x.code==='MAINTENANCE'?errorText(x):'Špatný kód.';
@@ -175,6 +176,69 @@ async function loadMyPushDevices(force=false){
   }
 }
 
+// Notifications
+function notificationUiMeta(n){
+  const channel=n?.channel||'automatic',severity=n?.severity||'info';
+  if(channel==='admin'&&severity==='critical')return {icon:'🚨',label:'KRITICKÉ SYSTÉMOVÉ',cls:'critical'};
+  if(channel==='admin'&&severity==='important')return {icon:'⚠️',label:'DŮLEŽITÉ · ADMIN',cls:'important'};
+  if(channel==='admin')return {icon:'🛡️',label:'ADMIN',cls:'admin-info'};
+  if(channel==='operational'&&severity==='important')return {icon:'⚠️',label:'DŮLEŽITÉ · PROVOZNÍ',cls:'important'};
+  if(channel==='operational')return {icon:'🔔',label:'PROVOZNÍ',cls:'operational'};
+  return {icon:'ℹ️',label:'AUTOMATICKÉ',cls:'automatic'};
+}
+function notificationRecipientOptions(selected=''){
+  return '<option value="all">Všichni aktivní uživatelé</option>'+(D.notificationRecipients||[]).map(u=>'<option value="'+e(u.id)+'" '+(selected===u.id?'selected':'')+'>'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
+}
+function notificationExpiresText(n){return n?.expiresAt?' · platí do '+dt(n.expiresAt):''}
+function renderNotificationSettings(){
+  if(!$('notificationPrefsCard'))return;
+  const p=D.notificationPrefs||{};
+  $('prefOperationalNotifications').checked=p.operational!==false;
+  $('prefAdminInfoNotifications').checked=p.adminInfo!==false;
+}
+function renderNotifications(){
+  if(!$('notificationList'))return;
+  const canSend=can('notificationsSendOperational');
+  $('operationalComposer').hidden=!canSend;
+  $('adminComposer').hidden=me?.role!=='admin';
+  if(canSend){
+    const cur=$('operationalRecipient').value;$('operationalRecipient').innerHTML=notificationRecipientOptions(cur);if(cur==='all'||(D.notificationRecipients||[]).some(u=>u.id===cur))$('operationalRecipient').value=cur;
+  }
+  if(me?.role==='admin'){
+    const cur=$('adminNoticeRecipient').value;$('adminNoticeRecipient').innerHTML=notificationRecipientOptions(cur);if(cur==='all'||(D.notificationRecipients||[]).some(u=>u.id===cur))$('adminNoticeRecipient').value=cur;
+    const car=$('adminNoticeVehicle').value;$('adminNoticeVehicle').innerHTML='<option value="">Bez konkrétního vozidla</option>'+(D.allCars||D.cars||[]).filter(c=>c.active!==false).map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');if((D.allCars||D.cars||[]).some(c=>c.id===car))$('adminNoticeVehicle').value=car;
+  }
+  document.querySelectorAll('[data-notification-view]').forEach(b=>b.classList.toggle('active',b.dataset.notificationView===notificationView));
+  let rows=(D.notificationInbox||[]).slice();
+  if(notificationView==='operational')rows=rows.filter(n=>n.channel==='operational');
+  if(notificationView==='admin')rows=rows.filter(n=>n.channel==='admin');
+  $('notificationList').innerHTML=rows.map(n=>{
+    const m=notificationUiMeta(n),pending=n.requiresAck&&!n.acknowledgedAt&&!n.expired;
+    return '<div class="notification-card '+m.cls+' '+(!n.read?'unread':'')+'">'+
+      '<div class="notification-head"><div><span class="notification-kind">'+m.icon+' '+m.label+'</span><h3>'+e(n.title||'Oznámení')+'</h3></div>'+(!n.read&&!n.expired?'<span class="notification-unread-dot"></span>':'')+'</div>'+
+      '<div class="notification-body">'+e(n.body||'')+'</div>'+
+      '<div class="notification-meta">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+(n.expired?' · UKONČENO':'')+'</div>'+
+      (pending?'<div class="toolbar" style="margin-top:10px"><button class="notification-ack primary" data-id="'+e(n.id)+'">✅ Rozumím</button>'+(n.carId?'<button class="notification-vehicle secondary" data-id="'+e(n.id)+'">🚗 Vozidlo</button>':'')+'</div>':n.acknowledgedAt?'<div class="notification-confirmed">✓ Potvrzeno '+dt(n.acknowledgedAt)+'</div>':'')+
+      '</div>';
+  }).join('')||'<div class="card"><div class="small">V této části zatím nejsou žádná oznámení.</div></div>';
+  document.querySelectorAll('.notification-ack').forEach(b=>b.onclick=()=>{const n=(D.notificationInbox||[]).find(x=>x.id===b.dataset.id);if(n)respondNotification(n,'understood')});
+  document.querySelectorAll('.notification-vehicle').forEach(b=>b.onclick=()=>{const n=(D.notificationInbox||[]).find(x=>x.id===b.dataset.id);if(n)respondNotification(n,'view_vehicle')});
+}
+function renderNotificationToast(){
+  const box=$('notificationToast'),n=(D.toastNotifications||[])[0];
+  if(!box)return;
+  if(!n){box.hidden=true;toastNotificationId=null;return}
+  if(toastNotificationId===n.id)return;
+  toastNotificationId=n.id;const m=notificationUiMeta(n);
+  box.className='notification-toast '+m.cls;
+  box.innerHTML='<button id="notificationToastClose" class="notification-toast-close" aria-label="Zavřít">×</button><div class="notification-kind">'+m.icon+' '+m.label+'</div><b>'+e(n.title||'Oznámení')+'</b><div>'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+'</div>';
+  box.hidden=false;
+  api('notificationSeen',{notificationId:n.id}).catch(()=>{});
+  const close=()=>{if(toastTimer)clearTimeout(toastTimer);toastTimer=null;box.hidden=true;toastNotificationId=null;refresh()};
+  $('notificationToastClose').onclick=close;
+  if(toastTimer)clearTimeout(toastTimer);
+  toastTimer=setTimeout(close,8000);
+}
 // Persistent in-app notifications
 function pendingNotifications(){
   const rows=[...(D.pendingNotifications||[])];
@@ -210,11 +274,12 @@ function renderNoticeOverlay(){
   }
   const n=pendingNotifications()[0];
   if(!n){ov.hidden=true;box.innerHTML='';return}
-  ov.hidden=false;
-  box.innerHTML='<h2>🔔 '+e(n.title)+'</h2><div class="sub">'+dt(n.createdAt)+(n.carPlate?' · '+e(n.carPlate):'')+'</div>'+
+  ov.hidden=false;const m=notificationUiMeta(n);
+  box.className='modal-card notification-modal '+m.cls;
+  box.innerHTML='<div class="notification-kind">'+m.icon+' '+m.label+'</div><h2>'+e(n.title)+'</h2><div class="sub">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+'</div>'+
     '<div class="notice">'+e(n.body)+'</div>'+
-    '<div class="small" style="margin-top:8px">Oznámení zůstane otevřené, dokud nepotvrdíš jednu z možností.</div>'+
-    '<div class="notice-actions"><button id="noticeOk" class="primary">Rozumím</button>'+
+    '<div class="small" style="margin-top:8px"><b>Vyžaduje potvrzení.</b> Oznámení zůstane otevřené, dokud nepotvrdíš jednu z možností.</div>'+
+    '<div class="notice-actions"><button id="noticeOk" class="primary">✅ Rozumím</button>'+
     (n.carId?'<button id="noticeVehicle" class="secondary">🚗 Zobrazit vozidlo</button>':'')+'</div>';
   $('noticeOk').onclick=()=>respondNotification(n,'understood');
   if(n.carId)$('noticeVehicle').onclick=()=>respondNotification(n,'view_vehicle');
@@ -307,8 +372,9 @@ function openModule(id){
   if(currentModule==='admin'&&me?.role==='admin')refresh();
   if(currentModule==='vehicleOverview'||currentModule==='service'||currentModule==='maintenance'||currentModule==='settings')renderModuleShell();
   if(currentModule==='tiretask')renderTireTask();
+  if(currentModule==='notifications')renderNotifications();
   if(currentModule==='transport'){renderTrafficReport();loadTrafficReport(false).catch(()=>{})}
-  if(currentModule==='settings'){updatePushStatus();loadMyPushDevices()}
+  if(currentModule==='settings'){updatePushStatus();loadMyPushDevices();renderNotificationSettings()}
 }
 
 function trafficStatusMeta(status){
@@ -693,6 +759,7 @@ function renderModuleShell(){
   if($('settingsRole'))$('settingsRole').textContent=roleLabel(me?.role);if($('themeMode'))$('themeMode').value=themePreference();if($('themeCurrent'))$('themeCurrent').textContent=document.documentElement.dataset.theme==='dark'?'🌙 Tmavý':'☀️ Světlý';
   renderTrafficPrefs();
   if($('homeTrafficStatus'))$('homeTrafficStatus').textContent=trafficHomeText();
+  if($('homeNotificationBadge')){$('homeNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('homeNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
   renderMainModuleCards();
   document.querySelectorAll('[data-module="pneu"]').forEach(x=>{if(me?.role!=='admin'&&moduleCfg('pneu').visible!==false)x.hidden=!hasPneuAccess()});
   const count=attentionIssues().length;
@@ -903,16 +970,13 @@ function renderAdminUsers(){
 
 // Notifications admin
 function renderNotificationAdmin(){
-  const cur=$('notifyRecipient').value;$('notifyRecipient').innerHTML='<option value="all">Všichni aktivní uživatelé</option>'+(D.users||[]).filter(u=>u.active).map(u=>'<option value="'+e(u.id)+'">'+e(u.name)+'</option>').join('');if(cur==='all'||(D.users||[]).some(u=>u.id===cur))$('notifyRecipient').value=cur;
-  const curCar=$('notifyVehicle').value;$('notifyVehicle').innerHTML='<option value="">Bez konkrétního vozidla</option>'+(D.allCars||[]).filter(c=>c.active!==false).map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');if((D.allCars||[]).some(c=>c.id===curCar))$('notifyVehicle').value=curCar;
   const s=D.notificationSettings||{};$('autoIncomplete').checked=!!s.incompleteEnabled;$('autoIncompleteDays').value=String(s.incompleteRepeatDays||3);$('autoIncompleteRecipients').value=s.incompleteRecipients||'workers';$('autoSummer').checked=s.incompleteMissingSummer!==false;$('autoWinter').checked=s.incompleteMissingWinter!==false;$('autoAnomaly').checked=!!s.adminAnomalyEnabled;$('autoAdminDays').value=String(s.adminAnomalyRepeatDays||3);$('autoStale').checked=!!s.staleEnabled;$('autoStaleDays').value=String(s.staleDays||365);
   $('notificationLog').innerHTML=(D.notificationLog||[]).slice(0,80).map(n=>{
-    const acks=(n.acks||[]).map(a=>'<div class="ack">✓ '+e(a.userName||a.userId)+' · '+(a.response==='view_vehicle'?'Zobrazil vozidlo':'Rozumím')+' · '+dt(a.at)+'</div>').join('');
-    const recipients=(n.recipientUserIds||[]).length,pending=Math.max(0,recipients-(n.acks||[]).length);
-    return '<div class="item"><b>'+e(n.title||n.type)+'</b>'+(n.carPlate?' <span class="badge">'+e(n.carPlate)+'</span>':'')+'<div class="small">'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+' · push '+(n.sent??0)+'/'+(n.devices??0)+(recipients?' · potvrzeno '+(n.acks||[]).length+'/'+recipients+' · čeká '+pending:'')+'</div>'+acks+'</div>';
+    const m=notificationUiMeta(n),acks=(n.acks||[]).map(a=>'<div class="ack">✓ '+e(a.userName||a.userId)+' · '+(a.response==='view_vehicle'?'Zobrazil vozidlo':'Rozumím')+' · '+dt(a.at)+'</div>').join('');
+    const recipients=(n.recipientUserIds||[]).length,pending=n.requiresAck?Math.max(0,recipients-(n.acks||[]).length):0;
+    return '<div class="item"><b>'+m.icon+' '+e(n.title||n.type)+'</b> <span class="badge">'+e(m.label)+'</span>'+(n.carPlate?' <span class="badge">'+e(n.carPlate)+'</span>':'')+'<div class="small">'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+' · push '+(n.sent??0)+'/'+(n.devices??0)+(n.requiresAck&&recipients?' · potvrzeno '+(n.acks||[]).length+'/'+recipients+' · čeká '+pending:' · bez povinného potvrzení')+'</div>'+acks+'</div>';
   }).join('')||'<div class="small">Zatím žádná oznámení.</div>';
 }
-$('sendNotification').onclick=async()=>{const recipient=$('notifyRecipient').value,carId=$('notifyVehicle').value||null,title=$('notifyTitle').value.trim(),message=$('notifyMessage').value.trim();try{const r=await api('adminSendNotification',{recipient,carId,title,message});note($('notifyMsg'),'Odesláno na '+r.sent+' zařízení. Oznámení čeká na potvrzení v aplikaci.','msg ok');$('notifyTitle').value=$('notifyMessage').value='';$('notifyVehicle').value='';await refresh()}catch(x){note($('notifyMsg'),errorText(x),'msg err')}};
 $('saveNotificationSettings').onclick=async()=>{const settings={incompleteEnabled:$('autoIncomplete').checked,incompleteRepeatDays:+$('autoIncompleteDays').value,incompleteRecipients:$('autoIncompleteRecipients').value,incompleteMissingSummer:$('autoSummer').checked,incompleteMissingWinter:$('autoWinter').checked,adminAnomalyEnabled:$('autoAnomaly').checked,adminAnomalyRepeatDays:+$('autoAdminDays').value,staleEnabled:$('autoStale').checked,staleDays:+$('autoStaleDays').value};try{await api('adminSaveNotificationSettings',{settings});alert('Pravidla oznámení jsou uložená.');await refresh()}catch(x){alert(errorText(x))}};
 
 // Audit
@@ -937,7 +1001,7 @@ function applyAccess(){
   if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
   if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
 }
-function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay()}
+function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
 function showTab(id,doRefresh=true){if(!allowedTab(id))return;document.querySelectorAll('#pneu .panel').forEach(p=>p.classList.toggle('active',p.id===id));document.querySelectorAll('.pneu-tabs button').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));if(doRefresh&&(id==='history'||id==='fleet'))refresh()}
 if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
@@ -1001,6 +1065,29 @@ if($('saveTransportSettings'))$('saveTransportSettings').onclick=async()=>{
 if($('addTrafficCorridor'))$('addTrafficCorridor').onclick=async()=>{
   const name=$('newTrafficName').value.trim(),type=$('newTrafficType').value,matchTerms=$('newTrafficTerms').value.trim(),description=$('newTrafficDescription').value.trim();
   try{await api('adminAddTransportCorridor',{name,type,matchTerms,description});$('newTrafficName').value=$('newTrafficTerms').value=$('newTrafficDescription').value='';note($('newTrafficMsg'),'Sledovaný úsek byl přidán.','msg ok');await refresh()}catch(x){note($('newTrafficMsg'),errorText(x),'msg err')}
+};
+document.querySelectorAll('[data-notification-view]').forEach(b=>b.onclick=()=>{notificationView=b.dataset.notificationView;renderNotifications()});
+if($('saveNotificationPrefs'))$('saveNotificationPrefs').onclick=async()=>{
+  const prefs={operational:$('prefOperationalNotifications').checked,adminInfo:$('prefAdminInfoNotifications').checked};
+  try{const r=await api('saveNotificationPrefs',{prefs});D.notificationPrefs=r.prefs;note($('notificationPrefsMsg'),'Nastavení oznámení je uložené.','msg ok');renderNotificationSettings()}catch(x){note($('notificationPrefsMsg'),errorText(x),'msg err')}
+};
+if($('sendOperationalNotice'))$('sendOperationalNotice').onclick=async()=>{
+  const expiresRaw=$('operationalExpires').value;
+  const data={recipient:$('operationalRecipient').value,severity:$('operationalSeverity').value,title:$('operationalTitle').value.trim(),message:$('operationalMessage').value.trim(),requiresAck:$('operationalAck').checked,expiresAt:expiresRaw?new Date(expiresRaw).toISOString():null};
+  try{const r=await api('sendOperationalNotification',data);note($('operationalNoticeMsg'),'Odesláno · push '+r.sent+'/'+(r.devices||0)+'.','msg ok');$('operationalTitle').value=$('operationalMessage').value=$('operationalExpires').value='';$('operationalAck').checked=false;await refresh()}catch(x){note($('operationalNoticeMsg'),errorText(x),'msg err')}
+};
+function updateAdminNoticeSeverity(){
+  if(!$('adminNoticeSeverity'))return;
+  const critical=$('adminNoticeSeverity').value==='critical';
+  $('adminNoticeAck').checked=critical||$('adminNoticeAck').checked;
+  $('adminNoticeAck').disabled=critical;
+  if($('adminNoticeSeverityHelp'))$('adminNoticeSeverityHelp').textContent=critical?'Kritické oznámení vždy obejde uživatelské preference a vyžaduje potvrzení.':$('adminNoticeSeverity').value==='important'?'Důležité Admin oznámení obejde uživatelské preference.':'Běžné Admin oznámení respektuje uživatelské nastavení.';
+}
+if($('adminNoticeSeverity'))$('adminNoticeSeverity').onchange=updateAdminNoticeSeverity;
+if($('sendAdminNotice'))$('sendAdminNotice').onclick=async()=>{
+  const expiresRaw=$('adminNoticeExpires').value;
+  const data={recipient:$('adminNoticeRecipient').value,carId:$('adminNoticeVehicle').value||null,severity:$('adminNoticeSeverity').value,title:$('adminNoticeTitle').value.trim(),message:$('adminNoticeMessage').value.trim(),requiresAck:$('adminNoticeAck').checked,expiresAt:expiresRaw?new Date(expiresRaw).toISOString():null};
+  try{const r=await api('adminSendNotification',data);note($('adminNoticeMsg'),'Admin oznámení odesláno · push '+r.sent+'/'+(r.devices||0)+'.','msg ok');$('adminNoticeTitle').value=$('adminNoticeMessage').value=$('adminNoticeExpires').value='';$('adminNoticeVehicle').value='';$('adminNoticeSeverity').value='info';$('adminNoticeAck').checked=false;updateAdminNoticeSeverity();await refresh()}catch(x){note($('adminNoticeMsg'),errorText(x),'msg err')}
 };
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));

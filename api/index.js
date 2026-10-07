@@ -23,6 +23,11 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
   staleEnabled: false,
   staleDays: 365,
 };
+const DEFAULT_USER_NOTIFICATION_PREFS = { operational: true, adminInfo: true };
+function normalizeUserNotificationPrefs(raw) {
+  const input=raw&&typeof raw==='object'?raw:{};
+  return { operational: input.operational !== false, adminInfo: input.adminInfo !== false };
+}
 const DEFAULT_TRANSPORT_CORRIDORS = [
   { id:'jenec', name:'Jeneč a okolí', type:'area', active:true, notifyAllowed:true, description:'Perimetr obce Jeneč a nejbližšího okolí.', matchTerms:['jeneč','jenec','hostivice','dobrovíz','dobroviz'] },
   { id:'d0-west', name:'D0 · Středokluky → Lochkov', type:'route', active:true, notifyAllowed:true, description:'Západní část Pražského okruhu od Středokluk po Lochkov.', matchTerms:['pražský okruh','prazsky okruh','d0','středokluky','stredokluky','ruzyň','ruzyne','zličín','zlicin','třebonice','trebonice','slivenec','lochkov'] },
@@ -110,9 +115,9 @@ function defaultSystemMessage(mode) {
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
-const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','transport','maintenance','settings'];
+const MODULE_KEYS = ['vehicleOverview','service','pneu','tiretask','transport','maintenance','notifications','settings'];
 const MODULE_LABELS = {
-  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TIRETASK', transport:'DOPRAVA', maintenance:'ÚDRŽBA', settings:'NASTAVENÍ'
+  vehicleOverview:'PŘEHLED VOZIDEL', service:'SERVIS', pneu:'PNEU / DOT', tiretask:'TIRETASK', transport:'DOPRAVA', maintenance:'ÚDRŽBA', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
 };
 const DEFAULT_MODULES = {
   vehicleOverview:{ visible:true, online:true, offlineMessage:'Přehled vozidel je dočasně mimo provoz.' },
@@ -121,6 +126,7 @@ const DEFAULT_MODULES = {
   tiretask:{ visible:true, online:true, offlineMessage:'Modul TIRETASK je dočasně mimo provoz.' },
   transport:{ visible:true, online:true, offlineMessage:'Dopravní report je dočasně mimo provoz.' },
   maintenance:{ visible:true, online:true, offlineMessage:'Modul ÚDRŽBA je dočasně mimo provoz.' },
+  notifications:{ visible:true, online:true, offlineMessage:'Modul OZNÁMENÍ je dočasně mimo provoz.' },
   settings:{ visible:true, online:true, offlineMessage:'Nastavení aplikace je dočasně mimo provoz.' },
 };
 function normalizeModules(raw) {
@@ -150,11 +156,12 @@ function actionModule(action){
   if (['tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
   if (['vehicleAdd','vehicleCategoryAdd'].includes(action)) return 'vehicleOverview';
   if (['trafficReport','saveTransportPrefs'].includes(action)) return 'transport';
-  if (['pushSubscribe','pushUnsubscribe','myPushDevices'].includes(action)) return 'settings';
+  if (['sendOperationalNotification'].includes(action)) return 'notifications';
+  if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
   return null;
 }
 const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
-const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsReceive'];
+const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsReceive','notificationsSendOperational'];
 const BASE_PERMISSIONS = {
   dotView: true,
   dotCreate: true,
@@ -172,6 +179,7 @@ const BASE_PERMISSIONS = {
   tireTaskCreate: false,
   tireTaskEdit: false,
   notificationsReceive: true,
+  notificationsSendOperational: false,
 };
 function normalizeRole(role) {
   if (role === 'admin') return 'admin';
@@ -265,7 +273,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 11;
+  cfg.version = 12;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -279,6 +287,7 @@ function normalizeConfig(cfg) {
     if (!u.lastLoginAt) u.lastLoginAt = null;
     u.role = normalizeRole(u.role);
     u.transportPrefs = normalizeTransportPrefs(u.transportPrefs, cfg.transport);
+    u.notificationPrefs = normalizeUserNotificationPrefs(u.notificationPrefs);
     if (u.role !== 'admin') {
       u.permissions ||= {};
       if (previousVersion < 11 && u.role === 'dispatch') {
@@ -361,13 +370,35 @@ function presenceFor(userId, presence, now = Date.now()) {
 }
 async function getNotificationLog() { return await readJson('notifications.json', []); }
 async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
+function normalizeNotificationRecord(n) {
+  const type=String(n?.type||'');
+  const channel=['operational','admin','automatic'].includes(n?.channel)?n.channel:(type==='manual'?'admin':'automatic');
+  const severity=['info','important','critical'].includes(n?.severity)?n.severity:(type==='manual'?'important':'info');
+  const requiresAck=typeof n?.requiresAck==='boolean'?n.requiresAck:type==='manual';
+  const expiresAt=n?.expiresAt&&Number.isFinite(Date.parse(n.expiresAt))?new Date(n.expiresAt).toISOString():null;
+  return {...n,channel,severity,requiresAck,expiresAt,acks:Array.isArray(n?.acks)?n.acks:[],seen:Array.isArray(n?.seen)?n.seen:[]};
+}
+function notificationExpired(n,now=Date.now()){return !!(n?.expiresAt&&Date.parse(n.expiresAt)<=now)}
+function normalizeNotificationExpiry(v){
+  if(!v)return null;
+  const ts=Date.parse(String(v));
+  return Number.isFinite(ts)&&ts>Date.now()?new Date(ts).toISOString():null;
+}
+function userAllowsNotification(user,channel,severity){
+  const prefs=normalizeUserNotificationPrefs(user?.notificationPrefs);
+  if(channel==='admin'&&(severity==='important'||severity==='critical'))return true;
+  if(channel==='operational')return prefs.operational;
+  if(channel==='admin')return prefs.adminInfo;
+  return true;
+}
 async function createNotification(row) {
   const rows = await getNotificationLog();
+  const normalized=normalizeNotificationRecord(row);
   const n = {
+    ...normalized,
     id: uid('n'), ts: Date.now(), createdAt: new Date().toISOString(),
     recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))],
-    acks: [],
-    ...row,
+    acks: [], seen: [],
   };
   rows.unshift(n);
   await writeNotificationLog(rows);
@@ -606,13 +637,28 @@ async function publicState(cfg, recs, currentUser) {
   const records = currentUser.role === 'admin' ? allRecords : compactRecordsForPermissions(allRecords, perms);
   const [notifications, tireTaskRows] = await Promise.all([getNotificationLog(), getTireTasks()]);
   const carById = Object.fromEntries(cfg.cars.map((c) => [c.id, c]));
-  const pendingNotifications = notifications.filter((n) =>
-    Array.isArray(n.recipientUserIds) && n.recipientUserIds.includes(currentUser.id) &&
-    !(n.acks || []).some((a) => a.userId === currentUser.id)
-  ).map((n) => ({
-    id: n.id, type: n.type, title: n.title, body: n.body, createdAt: n.createdAt,
-    carId: n.carId || null, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '',
-  }));
+  const notificationRows=notifications
+    .map(normalizeNotificationRecord)
+    .filter((n)=>Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
+  const publicNotification=(n)=>{
+    const ack=(n.acks||[]).find((a)=>a.userId===currentUser.id)||null;
+    const seen=(n.seen||[]).find((a)=>a.userId===currentUser.id)||null;
+    return {
+      id:n.id,type:n.type,channel:n.channel,severity:n.severity,requiresAck:!!n.requiresAck,title:n.title,body:n.body,createdAt:n.createdAt,
+      expiresAt:n.expiresAt||null,expired:notificationExpired(n),byUserName:n.byUserName||'',carId:n.carId||null,carPlate:n.carId?(carById[n.carId]?.plate||n.carPlate||''):(n.carPlate||''),
+      acknowledgedAt:ack?.at||null,seenAt:seen?.at||ack?.at||null,read:!!(seen||ack),
+    };
+  };
+  const severityOrder={critical:3,important:2,info:1};
+  const pendingNotifications=notificationRows
+    .filter((n)=>n.requiresAck&&!notificationExpired(n)&&!(n.acks||[]).some((a)=>a.userId===currentUser.id))
+    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
+    .map(publicNotification);
+  const toastNotifications=notificationRows
+    .filter((n)=>!n.requiresAck&&!notificationExpired(n)&&!(n.seen||[]).some((a)=>a.userId===currentUser.id))
+    .sort((a,b)=>(severityOrder[b.severity]||0)-(severityOrder[a.severity]||0)||(b.ts||0)-(a.ts||0))
+    .map(publicNotification);
+  const notificationInbox=notificationRows.slice(0,150).map(publicNotification);
   const base = {
     me: { id: currentUser.id, name: currentUser.name, role: currentUser.role, active: currentUser.active },
     permissions: perms,
@@ -625,6 +671,11 @@ async function publicState(cfg, recs, currentUser) {
     records,
     attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,
+    toastNotifications,
+    notificationInbox,
+    notificationUnreadCount: notificationInbox.filter((n)=>!n.read&&!n.expired).length,
+    notificationPrefs: normalizeUserNotificationPrefs(currentUser.notificationPrefs),
+    notificationRecipients: hasPermission(currentUser,'notificationsSendOperational') ? cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})) : [],
     system: (() => {
       const s = systemState(cfg);
       return { mode: s.mode, message: s.message || defaultSystemMessage(s.mode), customMessage: currentUser.role === 'admin' ? (s.message || '') : undefined, updatedAt: s.updatedAt || null, updatedBy: currentUser.role === 'admin' ? (s.updatedBy || null) : null };
@@ -641,7 +692,7 @@ async function publicState(cfg, recs, currentUser) {
     allCars: cfg.cars,
     dashboard: dashboard(cfg, recs),
     audit: audit.slice(0, 200),
-    notificationLog: notifications.slice(0, 150).map((n) => ({ ...n, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '' })),
+    notificationLog: notifications.slice(0, 150).map((raw) => {const n=normalizeNotificationRecord(raw);return { ...n, carPlate: n.carId ? (carById[n.carId]?.plate || '') : '' };}),
     notificationSettings: cfg.notificationSettings,
     transportAdmin: { ...cfg.transport, sourceConfigured: !!GOLEMIO_API_KEY, sourceName: 'NDIC přes Golemio' },
     modulesAdmin: normalizeModules(cfg.modules),
@@ -904,7 +955,7 @@ export default async function handler(req, res) {
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
       return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
     }
-    const readOnlyAllowed = new Set(['state', 'heartbeat', 'myPushDevices', 'vehicleDetail', 'notificationRespond', 'trafficReport']);
+    const readOnlyAllowed = new Set(['state', 'heartbeat', 'myPushDevices', 'vehicleDetail', 'notificationRespond', 'notificationSeen', 'saveNotificationPrefs', 'trafficReport']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
@@ -1184,6 +1235,40 @@ export default async function handler(req, res) {
         return json(res, 200, { ok: true, vehicle });
       }
       return json(res, 200, { ok: true });
+    }
+
+    if (body.action === 'notificationSeen') {
+      const notificationId=String(body.notificationId||'');
+      const notifications=await getNotificationLog(),n=notifications.find((x)=>x.id===notificationId);
+      if(!n||!Array.isArray(n.recipientUserIds)||!n.recipientUserIds.includes(currentUser.id))return json(res,403,{error:'NOTIFICATION'});
+      n.seen=Array.isArray(n.seen)?n.seen:[];
+      if(!n.seen.some((x)=>x.userId===currentUser.id))n.seen.push({userId:currentUser.id,userName:currentUser.name,at:new Date().toISOString()});
+      await writeNotificationLog(notifications);
+      return json(res,200,{ok:true});
+    }
+
+    if (body.action === 'saveNotificationPrefs') {
+      currentUser.notificationPrefs=normalizeUserNotificationPrefs(body.prefs);
+      await writeConfig(cfg);
+      await appendAudit(currentUser,'notification_prefs','Upraveno osobní nastavení oznámení',currentUser.notificationPrefs);
+      return json(res,200,{ok:true,prefs:currentUser.notificationPrefs});
+    }
+
+    if (body.action === 'sendOperationalNotification') {
+      if(!hasPermission(currentUser,'notificationsSendOperational'))return json(res,403,{error:'PERMISSION'});
+      const title=cleanText(body.title,80),message=cleanText(body.message,500),recipient=String(body.recipient||'all');
+      const severity=['info','important'].includes(body.severity)?body.severity:'info';
+      const requiresAck=!!body.requiresAck,expiresAt=body.expiresAt?normalizeNotificationExpiry(body.expiresAt):null;
+      if(!title||!message)return json(res,400,{error:'MESSAGE'});
+      if(body.expiresAt&&!expiresAt)return json(res,400,{error:'MESSAGE',message:'Platnost oznámení musí být v budoucnu.'});
+      let users=cfg.users.filter((u)=>u.active&&hasPermission(u,'notificationsReceive')&&userAllowsNotification(u,'operational',severity));
+      if(recipient!=='all')users=users.filter((u)=>u.id===recipient);
+      if(!users.length)return json(res,404,{error:'USER',message:'Žádný z vybraných uživatelů nemá povolená provozní oznámení.'});
+      const n=await createNotification({type:'operational_manual',channel:'operational',severity,requiresAck,expiresAt,title,body:message,recipient,recipientUserIds:users.map((u)=>u.id),byUserId:currentUser.id,byUserName:currentUser.name});
+      const result=await sendPushToUsers(cfg,users.map((u)=>u.id),{title:(severity==='important'?'⚠️ ':'🔔 ')+title,body:message,tag:'notification-'+n.id,url:'/?module=notifications&notification='+encodeURIComponent(n.id)});
+      await patchNotification(n.id,result);
+      await appendAudit(currentUser,'operational_notification_send','Odesláno provozní oznámení „'+title+'“ ('+result.sent+'/'+(result.devices||0)+')',{notificationId:n.id,recipient,severity,requiresAck,expiresAt,...result});
+      return json(res,200,{ok:true,notificationId:n.id,...result});
     }
 
     if (body.action === 'editRecord') {
@@ -1604,24 +1689,23 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'adminSendNotification') {
-      const title = cleanText(body.title, 80), message = cleanText(body.message, 240), recipient = String(body.recipient || 'all');
-      if (!title || !message) return json(res, 400, { error: 'MESSAGE' });
-      let users = cfg.users.filter((u) => u.active && hasPermission(u, 'notificationsReceive'));
-      if (recipient !== 'all') users = users.filter((u) => u.id === recipient);
-      if (!users.length) return json(res, 404, { error: 'USER' });
-      const carId = body.carId ? String(body.carId) : null;
-      const car = carId ? cfg.cars.find((c) => c.id === carId) : null;
-      if (carId && !car) return json(res, 404, { error: 'CAR' });
-      const n = await createNotification({
-        type: 'manual', title, body: message, recipient, recipientUserIds: users.map((u) => u.id),
-        carId: car?.id || null, carPlate: car?.plate || '', byUserId: currentUser.id, byUserName: currentUser.name,
-      });
-      const result = await sendPushToUsers(cfg, users.map((u) => u.id), {
-        title, body: message, tag: 'notification-' + n.id, url: '/?notification=' + encodeURIComponent(n.id),
-      });
-      await patchNotification(n.id, result);
-      await appendAudit(currentUser, 'notification_send', 'Odesláno oznámení „' + title + '“ (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, recipient, carId: car?.id || null, ...result });
-      return json(res, 200, { ok: true, notificationId: n.id, ...result });
+      const title=cleanText(body.title,80),message=cleanText(body.message,500),recipient=String(body.recipient||'all');
+      const severity=['info','important','critical'].includes(body.severity)?body.severity:'info';
+      const requiresAck=severity==='critical'?true:!!body.requiresAck;
+      const expiresAt=body.expiresAt?normalizeNotificationExpiry(body.expiresAt):null;
+      if(!title||!message)return json(res,400,{error:'MESSAGE'});
+      if(body.expiresAt&&!expiresAt)return json(res,400,{error:'MESSAGE',message:'Platnost oznámení musí být v budoucnu.'});
+      let users=cfg.users.filter((u)=>u.active&&(severity!=='info'||(hasPermission(u,'notificationsReceive')&&userAllowsNotification(u,'admin',severity))));
+      if(recipient!=='all')users=users.filter((u)=>u.id===recipient);
+      if(!users.length)return json(res,404,{error:'USER',message:'Žádný příjemce pro toto oznámení.'});
+      const carId=body.carId?String(body.carId):null,car=carId?cfg.cars.find((c)=>c.id===carId):null;
+      if(carId&&!car)return json(res,404,{error:'CAR'});
+      const n=await createNotification({type:'admin_manual',channel:'admin',severity,requiresAck,expiresAt,title,body:message,recipient,recipientUserIds:users.map((u)=>u.id),carId:car?.id||null,carPlate:car?.plate||'',byUserId:currentUser.id,byUserName:currentUser.name});
+      const icon=severity==='critical'?'🚨 ':severity==='important'?'⚠️ ':'🛡️ ';
+      const result=await sendPushToUsers(cfg,users.map((u)=>u.id),{title:icon+title,body:message,tag:'notification-'+n.id,url:'/?module=notifications&notification='+encodeURIComponent(n.id)});
+      await patchNotification(n.id,result);
+      await appendAudit(currentUser,'admin_notification_send','Odesláno Admin oznámení „'+title+'“ ('+result.sent+'/'+(result.devices||0)+')',{notificationId:n.id,recipient,severity,requiresAck,expiresAt,carId:car?.id||null,...result});
+      return json(res,200,{ok:true,notificationId:n.id,...result});
     }
 
     if (body.action === 'adminBackup') {
