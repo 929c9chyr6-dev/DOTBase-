@@ -1367,16 +1367,36 @@ async function deleteAdminUser(id){
   if(!ok)return;
   try{const r=await api('adminDeleteUser',{userId:id});await refresh();alert('Uživatel '+u.name+' byl smazán.'+(r.releasedTasks?' Nepřiřazené aktivní TASKy: '+r.releasedTasks+'.':''))}catch(x){alert(errorText(x))}
 }
+function adminRightsRoleMeta(role){
+  return role==='admin'?{icon:'🛡️',label:'ADMIN',desc:'Správa systému'}:
+    role==='dispatch'?{icon:'🎛️',label:'DISPATCH',desc:'Plánování a řízení práce'}:
+    role==='driver'?{icon:'🚘',label:'DRIVER',desc:'Řidič a běžná evidence'}:
+    role==='technician'?{icon:'🔧',label:'TECHNICIAN',desc:'Technické úkony a evidence'}:
+    {icon:'🧪',label:'TEST',desc:'Testovací profil'};
+}
 function renderAdminUserPermissions(){
   const root=$('userPermissions');if(!root)return;
-  root.innerHTML=(D.users||[]).map(u=>{
-    const admin=u.role==='admin';
+  const order={dispatch:0,driver:1,technician:2,test:3};
+  const users=(D.users||[]).slice();
+  const admins=users.filter(u=>u.role==='admin').sort((a,b)=>String(a.name).localeCompare(String(b.name),'cs'));
+  const regular=users.filter(u=>u.role!=='admin').sort((a,b)=>(order[a.role]??99)-(order[b.role]??99)||String(a.name).localeCompare(String(b.name),'cs'));
+  const userCard=(u)=>{
+    const admin=u.role==='admin',meta=adminRightsRoleMeta(u.role);
     const perms=admin
       ?'<div class="admin-rights-full">🛡️ <b>Plný systémový přístup</b><div class="small">Admin má všechna systémová oprávnění vždy aktivní a nelze je vypnout.</div></div>'
       :'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm-rights" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
     const taskNotices='<div class="module-note admin-rights-notices"><b>🔔 TASK oznámení</b><label class="switchline"><input class="utaskaccepted-rights" data-id="'+e(u.id)+'" type="checkbox" '+(u.taskNotifications?.accepted?'checked':'')+'><span><b>Přijetí TASKu</b><span class="small" style="display:block">Dostane oznámení, když přiřazený uživatel TASK přijme.</span></span></label></div>';
-    return '<div class="admin-rights-user '+(u.role==='test'?'test-profile':'')+'"><div class="top"><div><b>'+e(u.name)+'</b><div class="small">'+e(roleLabel(u.role))+' · '+(u.active?'aktivní':'zablokovaný')+'</div></div><span class="badge">'+(admin?'ADMIN':e(roleLabel(u.role)).toUpperCase())+'</span></div>'+perms+taskNotices+'<button class="save-user-rights primary" data-id="'+e(u.id)+'" style="width:100%;margin-top:9px">💾 Uložit práva</button></div>';
-  }).join('')||'<div class="small">Nejsou žádní uživatelé.</div>';
+    return '<div class="admin-rights-user role-'+e(u.role)+'">'+
+      '<div class="admin-rights-user-head"><div class="admin-rights-role-icon">'+meta.icon+'</div><div class="admin-rights-user-title"><b>'+e(u.name)+'</b><div class="small">'+e(meta.desc)+' · '+(u.active?'aktivní':'zablokovaný')+'</div></div><span class="admin-role-pill role-'+e(u.role)+'">'+e(meta.label)+'</span></div>'+
+      perms+taskNotices+'<button class="save-user-rights primary" data-id="'+e(u.id)+'" style="width:100%;margin-top:9px">💾 Uložit práva</button></div>';
+  };
+  const groups=[['dispatch','🎛️','Dispatch'],['driver','🚘','Driver'],['technician','🔧','Technician'],['test','🧪','TEST']];
+  let html=admins.length?'<section class="admin-rights-group system"><div class="admin-rights-group-title"><span>🛡️ Systém</span><b>'+admins.length+'</b></div>'+admins.map(userCard).join('')+'</section>':'';
+  for(const [role,icon,label] of groups){
+    const rows=regular.filter(u=>u.role===role);if(!rows.length)continue;
+    html+='<section class="admin-rights-group role-'+role+'"><div class="admin-rights-group-title"><span>'+icon+' '+label+'</span><b>'+rows.length+'</b></div>'+rows.map(userCard).join('')+'</section>';
+  }
+  root.innerHTML=html||'<div class="small">Nejsou žádní uživatelé.</div>';
   document.querySelectorAll('.save-user-rights').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,u=(D.users||[]).find(x=>x.id===id);if(!u)return;
     const payload={userId:id,taskNotifications:{accepted:!!document.querySelector('.utaskaccepted-rights[data-id="'+id+'"]')?.checked}};
