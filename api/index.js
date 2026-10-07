@@ -469,6 +469,7 @@ async function completeMatchingTireTask(cfg, record, user, preferredTaskId = nul
   if(!t)return null;
   const now=new Date(record.ts).toISOString();
   t.status='completed';
+  t.problemNote='';t.problemAt=null;
   t.completedRecordId=record.id;
   t.completedRecordPath=recordPath(record);
   t.completedDot=recordDotSummary(record);
