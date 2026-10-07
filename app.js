@@ -95,9 +95,24 @@ function recentKey(){return 'dotRecentCars:'+(me?.id||'guest')}
 function getRecent(){try{return JSON.parse(localStorage.getItem(recentKey())||'[]').filter(id=>D.cars.some(c=>c.id===id)).slice(0,4)}catch{return []}}
 function renderRecent(){const ids=getRecent(),sel=$('car').value;$('recentCars').innerHTML=ids.length?ids.map(id=>{const c=D.cars.find(x=>x.id===id);return c?'<button class="recent-car '+(sel===id?'active':'')+'" data-id="'+e(c.id)+'"><b>'+e(c.plate)+'</b><br><span style="font-size:12px;font-weight:600">'+e(c.name||'')+'</span></button>':''}).join(''):'<div class="small">Zatím žádná.</div>';document.querySelectorAll('.recent-car').forEach(b=>b.onclick=()=>chooseCar(b.dataset.id))}
 function rememberCar(id){if(!id)return;try{localStorage.setItem(recentKey(),JSON.stringify([id,...getRecent().filter(x=>x!==id)].slice(0,4)))}catch{}renderRecent()}
-function renderCarOptions(sel=$('car').value){const q=carSearch.trim().toLocaleUpperCase('cs-CZ');let cars=D.cars.filter(c=>!q||(c.plate+' '+c.name).toLocaleUpperCase('cs-CZ').includes(q));const cur=D.cars.find(c=>c.id===sel);if(cur&&!cars.some(c=>c.id===cur.id))cars=[cur,...cars];$('car').innerHTML='<option value="">'+(cars.length?'Vyber auto…':'Žádné auto nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name)+'</option>').join('');if(cur)$('car').value=sel;renderRecent()}
-function chooseCar(id){if(!D.cars.some(c=>c.id===id))return;carSearch='';$('carSearch').value='';renderCarOptions(id);$('car').value=id;rememberCar(id);prefillMileage(id)}
+function renderCarOptions(sel=$('car').value){
+  const categorySelect=$('carCategory'),selectedCategory=String(categorySelect?.value||'');
+  if(categorySelect){
+    categorySelect.innerHTML='<option value="">Všechny skupiny</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'">'+e(x)+'</option>').join('');
+    if(selectedCategory&&(D.vehicleCategories||[]).includes(selectedCategory))categorySelect.value=selectedCategory;
+  }
+  const category=String(categorySelect?.value||''),q=carSearch.trim().toLocaleUpperCase('cs-CZ');
+  let cars=D.cars.filter(c=>(!category||c.category===category)&&(!q||(c.plate+' '+c.name+' '+(c.vin||'')+' '+(c.category||'')).toLocaleUpperCase('cs-CZ').includes(q)));
+  const cur=D.cars.find(c=>c.id===sel);
+  if(cur&&(!category||cur.category===category)&&!cars.some(c=>c.id===cur.id))cars=[cur,...cars];
+  $('car').innerHTML='<option value="">'+(cars.length?'Vyber auto…':'Žádné auto nenalezeno')+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name)+(c.category?' · '+e(c.category):'')+'</option>').join('');
+  if(cur&&(!category||cur.category===category))$('car').value=sel;
+  if($('carFilterCount'))$('carFilterCount').textContent=(q||category)?cars.length+' vozidel'+(category?' · '+category:''):'';
+  renderRecent();
+}
+function chooseCar(id){const c=D.cars.find(x=>x.id===id);if(!c)return;carSearch='';$('carSearch').value='';if($('carCategory'))$('carCategory').value='';renderCarOptions(id);$('car').value=id;rememberCar(id);prefillMileage(id)}
 $('carSearch').oninput=()=>{carSearch=$('carSearch').value;renderCarOptions($('car').value)};
+if($('carCategory'))$('carCategory').onchange=()=>{$('car').value='';prefillMileage('');renderCarOptions('')};
 $('car').onchange=()=>{rememberCar($('car').value);prefillMileage($('car').value);renderRecent()};
 function setSeason(s){season=s;$('summer').classList.toggle('on',s==='summer');$('winter').classList.toggle('on',s==='winter');valid()}
 $('summer').onclick=()=>setSeason('summer');$('winter').onclick=()=>setSeason('winter');
