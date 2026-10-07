@@ -100,7 +100,7 @@ async function login(){
   }catch(x){
     const remaining=x.data?.attemptsRemaining;
     const msg=x.code==='ACCOUNT_LOCKED'?(x.data?.message||'Účet je zablokovaný. Kontaktuj administrátora.'):
-      x.code==='LOCKED'?'Přihlášení Admina je na 10 minut pozastavené.':
+      x.code==='LOCKED'?'Přihlášení je na 10 minut pozastavené.':
       x.code==='BAD_PIN'?'Špatný PIN.'+(Number.isFinite(remaining)?' Zbývá '+remaining+' '+(remaining===1?'pokus.':'pokusy.'):''):
       x.code==='MAINTENANCE'?errorText(x):errorText(x);
     note($('loginMsg'),msg,(x.code==='MAINTENANCE'||x.code==='ACCOUNT_LOCKED')?'msg warn':'msg err');
@@ -114,7 +114,7 @@ function showPinChangeScreen(reset){
   $('pinChangeMsg').innerHTML='';
   $('pinChangeOldWrap').hidden=!pinChangeState.requireOldPin;
   $('pinChangeOld').value=$('pinChangeNew').value=$('pinChangeConfirm').value='';
-  $('pinChangeRequirement').textContent=pinChangeState.requireOldPin?'Zadej svůj stávající PIN a potom dvakrát nový PIN.':'Admin nevyžaduje opětovné zadání stávajícího PINu. Zadej dvakrát nový PIN.';
+  $('pinChangeRequirement').textContent=pinChangeState.requireOldPin?'Zadej svůj stávající PIN a potom dvakrát nový PIN.':'Stávající PIN není potřeba znovu zadávat. Zadej dvakrát nový PIN.';
   setTimeout(()=>$(pinChangeState.requireOldPin?'pinChangeOld':'pinChangeNew').focus(),50);
 }
 async function submitOwnPinChange(){
