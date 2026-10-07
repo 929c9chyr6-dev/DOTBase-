@@ -147,6 +147,7 @@ function moduleState(cfg,key){ return normalizeModules(cfg.modules)[key] || {vis
 function userCanSeeModule(cfg,key,user){
   const m=moduleState(cfg,key);
   if(user?.role==='admin')return true;
+  if(user?.role==='test')return m.allowedUserIds.includes(user?.id);
   return m.visible||m.allowedUserIds.includes(user?.id);
 }
 function userCanAccessModule(cfg,key,user){
@@ -171,7 +172,7 @@ function actionModule(action){
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
   return null;
 }
-const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician'];
+const NON_ADMIN_ROLES = ['dispatch', 'driver', 'technician', 'test'];
 const PERMISSION_KEYS = ['dotView','dotCreate','dotEdit','dotDelete','fleetView','fleetExport','historyView','historyExport','vehicleDetail','vehicleAdd','vehicleCategoryAdd','attentionView','attentionEdit','tireTaskCreate','tireTaskEdit','notificationsReceive','notificationsSendOperational'];
 const BASE_PERMISSIONS = {
   dotView: true,
@@ -199,7 +200,9 @@ function normalizeRole(role) {
 }
 function effectivePermissions(user) {
   if (user?.role === 'admin') return Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
-  const out = { ...BASE_PERMISSIONS };
+  const out = user?.role === 'test'
+    ? Object.fromEntries(PERMISSION_KEYS.map((k)=>[k,false]))
+    : { ...BASE_PERMISSIONS };
   for (const k of PERMISSION_KEYS) if (typeof user?.permissions?.[k] === 'boolean') out[k] = user.permissions[k];
   return out;
 }
@@ -284,7 +287,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 13;
+  cfg.version = 14;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -685,7 +688,7 @@ async function publicState(cfg, recs, currentUser) {
     vehicleOverview: buildVehicleOverview(cfg, recs, tireTaskRows),
     tireTasks: userCanAccessModule(cfg,'tiretask',currentUser) ? publicTireTasks(cfg,tireTaskRows) : [],
     tireTaskCapabilities: tireTaskCapabilities(currentUser),
-    tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),
+    tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),
     records,
     attentionIssues: perms.attentionView ? computeIssues(cfg, recs).slice(0, 100) : [],
     pendingNotifications,

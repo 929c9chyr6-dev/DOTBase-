@@ -1,7 +1,7 @@
 (()=>{
 let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,trafficReport=null,trafficLoading=false,lastTrafficLoad=0,trafficPrefsDirty=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
-const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician'};
+const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
   vehicleOverview:{label:'PŘEHLED VOZIDEL',icon:'🚗'},
   service:{label:'SERVIS',icon:'🔧'},
@@ -849,20 +849,30 @@ function updateModuleControlUi(box){
   const online=box.querySelector('.module-online-toggle')?.checked!==false,visible=box.querySelector('.module-visible-toggle')?.checked!==false;
   const badge=box.querySelector('.module-control-state'),access=box.querySelector('.module-user-access');
   if(badge){badge.className='module-control-state '+(online?'online':'offline');badge.textContent=online?'🟢 ONLINE':'🔴 OFFLINE'}
-  if(access){access.hidden=!online||visible;access.querySelectorAll('input').forEach(x=>x.disabled=!online||visible)}
+  if(access){
+    const testGroup=access.querySelector('.module-test-group'),regularGroup=access.querySelector('.module-regular-group');
+    if(testGroup)testGroup.hidden=!online;
+    if(regularGroup)regularGroup.hidden=!online||visible;
+    access.querySelectorAll('.module-user-toggle[data-role="test"]').forEach(x=>x.disabled=!online);
+    access.querySelectorAll('.module-user-toggle:not([data-role="test"])').forEach(x=>x.disabled=!online||visible);
+    const hasTest=!!access.querySelector('.module-user-toggle[data-role="test"]'),hasRegular=!!access.querySelector('.module-user-toggle:not([data-role="test"])');
+    access.hidden=!online||(!hasTest&&(visible||!hasRegular));
+  }
 }
 function renderModuleControls(){
   if(me?.role!=='admin'||!$('adminModules'))return;
-  const modules=D.modulesAdmin||{},users=(D.users||[]).filter(u=>u.active&&u.role!=='admin');
+  const modules=D.modulesAdmin||{},users=(D.users||[]).filter(u=>u.active&&u.role!=='admin'),testUsers=users.filter(u=>u.role==='test'),regularUsers=users.filter(u=>u.role!=='test');
   $('adminModules').innerHTML=MODULE_KEYS.map(id=>{
     const meta=MODULE_META[id],m=modules[id]||{visible:true,online:true,allowedUserIds:[],offlineMessage:'Modul je dočasně mimo provoz.'},allowed=new Set(m.allowedUserIds||[]);
-    const userChecks=users.length?users.map(u=>'<label class="module-user-choice"><input class="module-user-toggle" data-module="'+e(id)+'" value="'+e(u.id)+'" type="checkbox" '+(allowed.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span></label>').join(''):'<div class="small">Nejsou žádní aktivní uživatelé k výběru.</div>';
+    const choices=list=>list.map(u=>'<label class="module-user-choice '+(u.role==='test'?'test-user-choice':'')+'"><input class="module-user-toggle" data-module="'+e(id)+'" data-role="'+e(u.role)+'" value="'+e(u.id)+'" type="checkbox" '+(allowed.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span></label>').join('');
+    const testChecks=testUsers.length?'<div class="module-test-group"><div class="filter-label">🧪 TEST účty — individuální přístup platí vždy</div><div class="module-user-grid">'+choices(testUsers)+'</div></div>':'';
+    const regularChecks=regularUsers.length?'<div class="module-regular-group"><div class="filter-label">Výjimky pro ostatní uživatele při skrytém modulu</div><div class="module-user-grid">'+choices(regularUsers)+'</div></div>':'';
     return '<div class="module-control" data-module-control="'+e(id)+'">'+
       '<div class="module-control-head"><div><b>'+meta.icon+' '+e(meta.label)+'</b><div class="small" style="margin-top:3px">Dostupnost a individuální přístup</div></div>'+
       '<span class="module-control-state '+(m.online?'online':'offline')+'">'+(m.online?'🟢 ONLINE':'🔴 OFFLINE')+'</span></div>'+
       '<div class="switchline"><input class="module-online-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.online?'checked':'')+'><span><b>Modul online</b><span class="small" style="display:block">Když je Offline, nepřihlásí se do něj nikdo — ani Admin.</span></span></div>'+
       '<div class="switchline"><input class="module-visible-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.visible?'checked':'')+'><span><b>Zobrazit všem</b><span class="small" style="display:block">Když vypneš, modul bude skrytý a můžeš níže vybrat výjimky.</span></span></div>'+
-      '<div class="module-user-access" '+((!m.online||m.visible)?'hidden':'')+'><div class="filter-label">Povolit skrytý modul konkrétním uživatelům</div><div class="module-user-grid">'+userChecks+'</div></div>'+
+      '<div class="module-user-access">'+testChecks+regularChecks+'</div>'+
       '<div class="filter-label">Zpráva při Offline režimu</div>'+
       '<input class="module-offline-message" data-id="'+e(id)+'" maxlength="220" value="'+e(m.offlineMessage||'')+'" placeholder="Modul je dočasně mimo provoz.">'+
       '</div>';
@@ -963,9 +973,10 @@ $('addUser').onclick=async()=>{const name=$('newUserName').value.trim(),pin=$('n
 function renderAdminUsers(){
   $('users').innerHTML=(D.users||[]).map(u=>{
     const admin=u.role==='admin';
-    const role=admin?'<span class="badge">Admin</span>':'<select class="ur" data-id="'+e(u.id)+'" style="max-width:160px"><option value="driver" '+(u.role==='driver'?'selected':'')+'>Driver</option><option value="dispatch" '+(u.role==='dispatch'?'selected':'')+'>Dispatch</option><option value="technician" '+(u.role==='technician'?'selected':'')+'>Technician</option></select>';
+    const role=admin?'<span class="badge">Admin</span>':'<select class="ur" data-id="'+e(u.id)+'" style="max-width:160px"><option value="driver" '+(u.role==='driver'?'selected':'')+'>Driver</option><option value="dispatch" '+(u.role==='dispatch'?'selected':'')+'>Dispatch</option><option value="technician" '+(u.role==='technician'?'selected':'')+'>Technician</option><option value="test" '+(u.role==='test'?'selected':'')+'>TEST</option></select>';
+    const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Práva nastav níže a přístup k jednotlivým modulům v Admin → Moduly.</div></div>':'';
     const perms=admin?'<div class="small" style="margin:9px 0"><b>Plný systémový přístup.</b> Tato práva nelze vypnout.</div>':'<div class="perm-grid">'+PERMS.map(([k,l])=>'<label class="perm"><input class="uperm" data-id="'+e(u.id)+'" data-k="'+e(k)+'" type="checkbox" '+(u.permissions?.[k]?'checked':'')+'><span>'+e(l)+'</span></label>').join('')+'</div>';
-    return '<div class="user"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'"><input class="up" data-id="'+e(u.id)+'" inputmode="numeric" maxlength="2" placeholder="nový PIN" style="max-width:130px">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button><button class="genpin secondary" data-id="'+e(u.id)+'">🎲 Nový PIN</button>'+(!admin?'<button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'"><input class="up" data-id="'+e(u.id)+'" inputmode="numeric" maxlength="2" placeholder="nový PIN" style="max-width:130px">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+testInfo+perms+'<div class="toolbar"><button class="primary su" data-id="'+e(u.id)+'">Uložit</button><button class="genpin secondary" data-id="'+e(u.id)+'">🎲 Nový PIN</button>'+(!admin?'<button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,p=document.querySelector('.up[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
