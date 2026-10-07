@@ -396,13 +396,18 @@ function publicTireTasks(cfg, rows) {
     return aa.localeCompare(bb);
   });
 }
-async function completeMatchingTireTask(cfg, record, user) {
+async function completeMatchingTireTask(cfg, record, user, preferredTaskId = null) {
   const rows=await getTireTasks();
-  const day=pragueDate(record.ts);
-  const matches=rows.filter((t)=>t.carId===record.carId&&t.targetSeason===record.season&&t.date===day&&['planned','in_progress','problem'].includes(t.status));
-  if(!matches.length)return null;
-  matches.sort((a,b)=>String(a.time||'23:59').localeCompare(String(b.time||'23:59')));
-  const t=matches[0], now=new Date(record.ts).toISOString();
+  const open=(t)=>t.carId===record.carId&&t.targetSeason===record.season&&['planned','in_progress','problem'].includes(t.status);
+  let t=preferredTaskId ? rows.find((x)=>x.id===String(preferredTaskId)&&open(x)) : null;
+  if(!t){
+    const day=pragueDate(record.ts);
+    const matches=rows.filter((x)=>open(x)&&x.date===day);
+    matches.sort((a,b)=>String(a.time||'23:59').localeCompare(String(b.time||'23:59')));
+    t=matches[0]||null;
+  }
+  if(!t)return null;
+  const now=new Date(record.ts).toISOString();
   t.status='completed';
   t.completedRecordId=record.id;
   t.completedRecordPath=recordPath(record);
@@ -877,7 +882,7 @@ export default async function handler(req, res) {
       await put(recordPath(r), '1', { access: 'private', addRandomSuffix: false, contentType: 'text/plain' });
       touchCar(car, currentUser, new Date(r.ts).toISOString());
       await writeConfig(cfg);
-      const completedTask=await completeMatchingTireTask(cfg,r,currentUser);
+      const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
       await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${dot} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
       if(completedTask) await appendAudit(currentUser,'tiretask_auto_complete',`TIRETASK ${car.plate} automaticky označen jako hotový`,{taskId:completedTask.id,recordId:r.id});
       return json(res, 200, { ok: true, tireTaskCompleted:completedTask ? { id:completedTask.id } : null });
