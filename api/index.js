@@ -137,17 +137,28 @@ function normalizeModules(raw) {
     out[key] = {
       visible: src.visible !== false,
       online: src.online !== false,
+      allowedUserIds: [...new Set((Array.isArray(src.allowedUserIds)?src.allowedUserIds:[]).map(String).filter(Boolean))].slice(0,200),
       offlineMessage: cleanText(src.offlineMessage || DEFAULT_MODULES[key].offlineMessage, 220),
     };
   }
   return out;
 }
-function moduleState(cfg,key){ return normalizeModules(cfg.modules)[key] || {visible:true,online:true,offlineMessage:'Modul je dočasně mimo provoz.'}; }
+function moduleState(cfg,key){ return normalizeModules(cfg.modules)[key] || {visible:true,online:true,allowedUserIds:[],offlineMessage:'Modul je dočasně mimo provoz.'}; }
+function userCanSeeModule(cfg,key,user){
+  const m=moduleState(cfg,key);
+  if(user?.role==='admin')return true;
+  return m.visible||m.allowedUserIds.includes(user?.id);
+}
+function userCanAccessModule(cfg,key,user){
+  const m=moduleState(cfg,key);
+  if(!m.online)return false;
+  return userCanSeeModule(cfg,key,user);
+}
 function publicModules(cfg,currentUser){
   const modules=normalizeModules(cfg.modules);
   return Object.fromEntries(MODULE_KEYS.map((key)=>[key,{
-    visible: currentUser?.role==='admin' ? true : modules[key].visible,
-    online: currentUser?.role==='admin' ? true : modules[key].online,
+    visible: userCanSeeModule(cfg,key,currentUser),
+    online: modules[key].online,
     offlineMessage: modules[key].offlineMessage,
   }]));
 }
@@ -273,7 +284,7 @@ async function writeJson(path, value) {
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 12;
+  cfg.version = 13;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -672,7 +683,7 @@ async function publicState(cfg, recs, currentUser) {
     vehicleCategories: cfg.vehicleCategories || DEFAULT_VEHICLE_CATEGORIES,
     cars: cfg.cars.filter((c) => c.active !== false),
     vehicleOverview: buildVehicleOverview(cfg, recs, tireTaskRows),
-    tireTasks: (currentUser.role==='admin'||(moduleState(cfg,'tiretask').visible&&moduleState(cfg,'tiretask').online)) ? publicTireTasks(cfg,tireTaskRows) : [],
+    tireTasks: userCanAccessModule(cfg,'tiretask',currentUser) ? publicTireTasks(cfg,tireTaskRows) : [],
     tireTaskCapabilities: tireTaskCapabilities(currentUser),
     tireTaskAssignableUsers: (()=>{const caps=tireTaskCapabilities(currentUser);return (caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name,role:u.role})):[]})(),
     records,
@@ -968,9 +979,10 @@ export default async function handler(req, res) {
     }
 
     const requestedModule = actionModule(body.action);
-    if (currentUser.role !== 'admin' && requestedModule) {
-      const ms = moduleState(cfg, requestedModule);
-      if (!ms.online) return json(res, 423, { error:'MODULE_OFFLINE', module:requestedModule, moduleLabel:MODULE_LABELS[requestedModule], message:ms.offlineMessage });
+    if (requestedModule) {
+      const ms=moduleState(cfg,requestedModule);
+      if(!ms.online)return json(res,423,{error:'MODULE_OFFLINE',module:requestedModule,moduleLabel:MODULE_LABELS[requestedModule],message:ms.offlineMessage});
+      if(currentUser.role!=='admin'&&!userCanSeeModule(cfg,requestedModule,currentUser))return json(res,403,{error:'MODULE_HIDDEN',module:requestedModule,moduleLabel:MODULE_LABELS[requestedModule],message:'Tento modul pro tebe není povolený.'});
     }
 
     if (body.action === 'state') return json(res, 200, await publicState(cfg, await getRecords(), currentUser));
@@ -1393,6 +1405,10 @@ export default async function handler(req, res) {
         if (!incoming[key] || typeof incoming[key] !== 'object') continue;
         if (typeof incoming[key].visible === 'boolean') next[key].visible = incoming[key].visible;
         if (typeof incoming[key].online === 'boolean') next[key].online = incoming[key].online;
+        if (Array.isArray(incoming[key].allowedUserIds)) {
+          const validIds=new Set(cfg.users.filter((u)=>u.active!==false&&u.role!=='admin').map((u)=>u.id));
+          next[key].allowedUserIds=[...new Set(incoming[key].allowedUserIds.map(String).filter((id)=>validIds.has(id)))].slice(0,200);
+        }
         if (incoming[key].offlineMessage !== undefined) next[key].offlineMessage = cleanText(incoming[key].offlineMessage,220) || DEFAULT_MODULES[key].offlineMessage;
       }
       cfg.modules = next;

@@ -349,8 +349,7 @@ function renderMainModuleCards(){
   MODULE_KEYS.forEach(id=>{
     document.querySelectorAll('[data-module="'+id+'"]').forEach(card=>{
       const cfg=moduleCfg(id);
-      if(me?.role!=='admin')card.hidden=cfg.visible===false;
-      else card.hidden=false;
+      card.hidden=me?.role!=='admin'&&cfg.visible===false;
       card.classList.toggle('module-offline',cfg.online===false);
       card.title=cfg.online===false?(cfg.offlineMessage||'Modul je dočasně mimo provoz.'):'';
     });
@@ -361,7 +360,11 @@ function hasPneuAccess(){return ['dotCreate','fleetView','historyView','attentio
 function openModule(id){
   if(id==='admin'&&me?.role!=='admin')return;
   if(id==='pneu'&&!hasPneuAccess())return;
-  if(MODULE_KEYS.includes(id)&&me?.role!=='admin'&&moduleCfg(id).online===false)return showModuleBlocked(id,moduleCfg(id).offlineMessage);
+  if(MODULE_KEYS.includes(id)){
+    const cfg=moduleCfg(id);
+    if(cfg.online===false)return showModuleBlocked(id,cfg.offlineMessage);
+    if(me?.role!=='admin'&&cfg.visible===false)return;
+  }
   currentModule=id||'home';
   if($('moduleBlocked'))$('moduleBlocked').hidden=true;
   document.querySelectorAll('.module-screen').forEach(x=>x.classList.toggle('active',x.id===currentModule));
@@ -465,7 +468,7 @@ function renderTrafficReport(){
   renderTrafficMap(r);
 }
 async function loadTrafficReport(force=false){
-  if(!tok||trafficLoading||D.transport?.enabled===false||(me?.role!=='admin'&&moduleCfg('transport').online===false))return trafficReport;
+  if(!tok||trafficLoading||D.transport?.enabled===false||moduleCfg('transport').online===false)return trafficReport;
   trafficLoading=true;renderTrafficReport();
   try{
     trafficReport=await api('trafficReport',{force:!!force});lastTrafficLoad=Date.now();
@@ -482,7 +485,7 @@ function updateTrafficRepeatVisibility(){
 function renderTrafficPrefs(force=false){
   if(!$('trafficPrefsCard'))return;
   const t=D.transport||{},p=t.prefs||{};
-  const transportOffline=me?.role!=='admin'&&moduleCfg('transport').online===false;
+  const transportOffline=moduleCfg('transport').online===false;
   const hiddenByAdmin=me?.role!=='admin'&&t.userSettingsVisible===false;
   $('trafficPrefsCard').hidden=t.enabled===false||transportOffline||hiddenByAdmin;
   if(trafficPrefsDirty&&!force)return;
@@ -841,24 +844,31 @@ function renderTransportAdmin(){
   document.querySelectorAll('.delete-traffic').forEach(b=>b.onclick=async()=>{const x=(D.transportAdmin?.corridors||[]).find(v=>v.id===b.dataset.id);if(!x)return;if(!confirm('Odstranit sledovaný úsek „'+x.name+'“?'))return;try{await api('adminDeleteTransportCorridor',{id:x.id});await refresh()}catch(err){alert(errorText(err))}});
 }
 
+function updateModuleControlUi(box){
+  if(!box)return;
+  const online=box.querySelector('.module-online-toggle')?.checked!==false,visible=box.querySelector('.module-visible-toggle')?.checked!==false;
+  const badge=box.querySelector('.module-control-state'),access=box.querySelector('.module-user-access');
+  if(badge){badge.className='module-control-state '+(online?'online':'offline');badge.textContent=online?'🟢 ONLINE':'🔴 OFFLINE'}
+  if(access){access.hidden=!online||visible;access.querySelectorAll('input').forEach(x=>x.disabled=!online||visible)}
+}
 function renderModuleControls(){
   if(me?.role!=='admin'||!$('adminModules'))return;
-  const modules=D.modulesAdmin||{};
+  const modules=D.modulesAdmin||{},users=(D.users||[]).filter(u=>u.active&&u.role!=='admin');
   $('adminModules').innerHTML=MODULE_KEYS.map(id=>{
-    const meta=MODULE_META[id],m=modules[id]||{visible:true,online:true,offlineMessage:'Modul je dočasně mimo provoz.'};
+    const meta=MODULE_META[id],m=modules[id]||{visible:true,online:true,allowedUserIds:[],offlineMessage:'Modul je dočasně mimo provoz.'},allowed=new Set(m.allowedUserIds||[]);
+    const userChecks=users.length?users.map(u=>'<label class="module-user-choice"><input class="module-user-toggle" data-module="'+e(id)+'" value="'+e(u.id)+'" type="checkbox" '+(allowed.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span></label>').join(''):'<div class="small">Nejsou žádní aktivní uživatelé k výběru.</div>';
     return '<div class="module-control" data-module-control="'+e(id)+'">'+
-      '<div class="module-control-head"><div><b>'+meta.icon+' '+e(meta.label)+'</b><div class="small" style="margin-top:3px">Nastavení pro běžné uživatele</div></div>'+
+      '<div class="module-control-head"><div><b>'+meta.icon+' '+e(meta.label)+'</b><div class="small" style="margin-top:3px">Dostupnost a individuální přístup</div></div>'+
       '<span class="module-control-state '+(m.online?'online':'offline')+'">'+(m.online?'🟢 ONLINE':'🔴 OFFLINE')+'</span></div>'+
-      '<div class="switchline"><input class="module-visible-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.visible?'checked':'')+'><span>Zobrazit v hlavním menu</span></div>'+
-      '<div class="switchline"><input class="module-online-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.online?'checked':'')+'><span>Modul online</span></div>'+
+      '<div class="switchline"><input class="module-online-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.online?'checked':'')+'><span><b>Modul online</b><span class="small" style="display:block">Když je Offline, nepřihlásí se do něj nikdo — ani Admin.</span></span></div>'+
+      '<div class="switchline"><input class="module-visible-toggle" data-id="'+e(id)+'" type="checkbox" '+(m.visible?'checked':'')+'><span><b>Zobrazit všem</b><span class="small" style="display:block">Když vypneš, modul bude skrytý a můžeš níže vybrat výjimky.</span></span></div>'+
+      '<div class="module-user-access" '+((!m.online||m.visible)?'hidden':'')+'><div class="filter-label">Povolit skrytý modul konkrétním uživatelům</div><div class="module-user-grid">'+userChecks+'</div></div>'+
       '<div class="filter-label">Zpráva při Offline režimu</div>'+
       '<input class="module-offline-message" data-id="'+e(id)+'" maxlength="220" value="'+e(m.offlineMessage||'')+'" placeholder="Modul je dočasně mimo provoz.">'+
       '</div>';
   }).join('');
-  document.querySelectorAll('.module-online-toggle').forEach(x=>x.onchange=()=>{
-    const box=x.closest('.module-control'),badge=box?.querySelector('.module-control-state');
-    if(badge){badge.className='module-control-state '+(x.checked?'online':'offline');badge.textContent=x.checked?'🟢 ONLINE':'🔴 OFFLINE'}
-  });
+  document.querySelectorAll('.module-online-toggle,.module-visible-toggle').forEach(x=>x.onchange=()=>updateModuleControlUi(x.closest('.module-control')));
+  document.querySelectorAll('.module-control').forEach(updateModuleControlUi);
 }
 
 // Admin dashboard
@@ -999,7 +1009,8 @@ function applyAccess(){
   if($('saveTrafficPrefs'))$('saveTrafficPrefs').disabled=isReadOnly();
   if(currentModule==='admin'&&me.role!=='admin')openModule('home');
   if(currentModule==='pneu'&&!hasPneuAccess())openModule('home');
-  if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
+  if(MODULE_KEYS.includes(currentModule)&&moduleCfg(currentModule).online===false)showModuleBlocked(currentModule,moduleCfg(currentModule).offlineMessage);
+  else if(MODULE_KEYS.includes(currentModule)&&me.role!=='admin'&&moduleCfg(currentModule).visible===false)openModule('home');
 }
 function render(){const sel=$('car').value;renderCarOptions(sel);valid();renderFleet();renderHist();if(me.role==='admin')renderAdmin();else renderAttention();renderModuleShell();renderTireTask();renderNotificationSettings();renderNotifications();if(currentModule==='transport')renderTrafficReport();applyAccess();renderSystemBanner();renderNoticeOverlay();renderNotificationToast()}
 
@@ -1010,7 +1021,8 @@ if($('saveModuleControls'))$('saveModuleControls').onclick=async()=>{
     const visible=document.querySelector('.module-visible-toggle[data-id="'+id+'"]');
     const online=document.querySelector('.module-online-toggle[data-id="'+id+'"]');
     const message=document.querySelector('.module-offline-message[data-id="'+id+'"]');
-    modules[id]={visible:!!visible?.checked,online:!!online?.checked,offlineMessage:message?.value.trim()||''};
+    const allowedUserIds=[...document.querySelectorAll('.module-user-toggle[data-module="'+id+'"]:checked')].map(x=>x.value);
+    modules[id]={visible:!!visible?.checked,online:!!online?.checked,allowedUserIds,offlineMessage:message?.value.trim()||''};
   });
   try{
     const r=await api('adminSaveModules',{modules});
@@ -1134,7 +1146,7 @@ async function heartbeat(){
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')markActivity();heartbeat()});
 window.addEventListener('pagehide',()=>{if(!tok)return;fetch('/api',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({action:'heartbeat',visible:false,active:false}),keepalive:true}).catch(()=>{})});
 setInterval(()=>{
-  if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false||(me?.role!=='admin'&&moduleCfg('transport').online===false))return;
+  if(!tok||document.visibilityState!=='visible'||D.transport?.enabled===false||moduleCfg('transport').online===false)return;
   const mins=Math.max(3,Number(D.transport?.pollMinutes||5));
   if(Date.now()-lastTrafficLoad>=mins*60000)loadTrafficReport(false).catch(()=>{});
 },60000);
