@@ -1,5 +1,5 @@
 (()=>{
-let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='';
+let tok='',me=null,D={cars:[],records:[]},season='',carSearch='',swReg=null,openVehicleDetail=null,lastInteraction=Date.now(),currentModule='home',settingsDevicesLoaded=false,tireTaskView='today',pendingTireTaskId=null,tireTaskDraftRows=[],tireTaskDraftSeq=0,editingCarId=null,notificationView='all',toastNotificationId=null,toastTimer=null,pinChangeState=null,pinResetAdminUserId=null,loginUsers=[],seasonDashboardCampaign='',globalFocusRecordId='',globalSearchTimer=null,globalSearchSeq=0,lastSyncVersion='',syncInFlight=false,adminStateLoadedAt=0,dataLoadedAt={},historyNextOffset=null,historyTotal=0,historyLoading=false,fleetDataKey='',taskProblemTaskId=null;
 const $=x=>document.getElementById(x), e=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
 const ROLE_LABELS={admin:'Admin',dispatch:'Dispatch',driver:'Driver',technician:'Technician',test:'TEST'};
 const MODULE_META={
@@ -89,11 +89,12 @@ async function login(){
     $('main').hidden=false;
     await refresh();await heartbeat();await updatePushStatus();
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
-    const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module');
+    const qs=new URLSearchParams(location.search),tab=qs.get('tab'),mod=qs.get('module'),taskId=qs.get('task');
     if(tab==='admin')openModule('admin');
     else if(['entry','season','fleet','history'].includes(tab)){openModule('pneu');showTab(tab)}
     else if(['vehicleOverview','pneu','tiretask','notifications','settings','admin'].includes(mod))openModule(mod);
     else openModule('home');
+    if(mod==='tiretask'&&taskId)openSpecificTask(taskId);
   }catch(x){
     const remaining=x.data?.attemptsRemaining;
     const msg=x.code==='ACCOUNT_LOCKED'?(x.data?.message||'Účet je zablokovaný. Kontaktuj administrátora.'):
@@ -188,7 +189,9 @@ async function loadFleetData(force=false){
 }
 async function loadTaskData(force=false){
   if(!force&&dataFresh('tiretask'))return;
-  const r=await api('taskData');Object.assign(D,r);dataLoadedAt.tiretask=Date.now();renderTireTask();renderHomePulse();
+  const r=await api('taskData');Object.assign(D,r);dataLoadedAt.tiretask=Date.now();
+  D.myTaskSummary=(D.tireTasks||[]).filter((t)=>t.assignedToUserId===me?.id&&t.status!=='closed').slice(0,8);
+  renderTireTask();renderHomePulse();renderHomeAssignedTasks();
 }
 async function loadNotificationData(force=false){
   if(!force&&dataFresh('notifications'))return;
@@ -367,15 +370,18 @@ function renderNotifications(){
   if(notificationView==='admin')rows=rows.filter(n=>n.channel==='admin');
   $('notificationList').innerHTML=rows.map(n=>{
     const m=notificationUiMeta(n),pending=n.requiresAck&&!n.acknowledgedAt&&!n.expired;
+    const taskAction=n.taskId?'<button class="notification-task secondary" data-task="'+e(n.taskId)+'">📋 Otevřít TASK</button>':'';
+    const ackActions=pending?'<button class="notification-ack primary" data-id="'+e(n.id)+'">✅ Rozumím</button>'+(n.carId?'<button class="notification-vehicle secondary" data-id="'+e(n.id)+'">🚗 Vozidlo</button>':''):'';
     return '<div class="notification-card '+m.cls+' '+(!n.read?'unread':'')+'" data-notification-id="'+e(n.id)+'">'+
       '<div class="notification-head"><div><div class="notification-kind">'+notificationKindHtml(m)+'</div><h3>'+e(n.title||'Oznámení')+'</h3></div>'+(!n.read&&!n.expired?'<span class="notification-unread-dot"></span>':'')+'</div>'+
       '<div class="notification-body">'+e(n.body||'')+'</div>'+
       '<div class="notification-meta">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+(n.carPlate?' · '+e(n.carPlate):'')+notificationExpiresText(n)+(n.expired?' · UKONČENO':'')+'</div>'+
-      (pending?'<div class="toolbar" style="margin-top:10px"><button class="notification-ack primary" data-id="'+e(n.id)+'">✅ Rozumím</button>'+(n.carId?'<button class="notification-vehicle secondary" data-id="'+e(n.id)+'">🚗 Vozidlo</button>':'')+'</div>':n.acknowledgedAt?'<div class="notification-confirmed">✓ Potvrzeno '+dt(n.acknowledgedAt)+'</div>':'')+
+      ((ackActions||taskAction)?'<div class="toolbar" style="margin-top:10px">'+ackActions+taskAction+'</div>':n.acknowledgedAt?'<div class="notification-confirmed">✓ Potvrzeno '+dt(n.acknowledgedAt)+'</div>':'')+
       '</div>';
   }).join('')||'<div class="card"><div class="small">V této části zatím nejsou žádná oznámení.</div></div>';
   document.querySelectorAll('.notification-ack').forEach(b=>b.onclick=()=>{const n=(D.notificationInbox||[]).find(x=>x.id===b.dataset.id);if(n)respondNotification(n,'understood')});
   document.querySelectorAll('.notification-vehicle').forEach(b=>b.onclick=()=>{const n=(D.notificationInbox||[]).find(x=>x.id===b.dataset.id);if(n)respondNotification(n,'view_vehicle')});
+  document.querySelectorAll('.notification-task').forEach(b=>b.onclick=()=>openSpecificTask(b.dataset.task));
 }
 function renderNotificationToast(){
   const box=$('notificationToast'),n=(D.toastNotifications||[])[0];
@@ -384,11 +390,12 @@ function renderNotificationToast(){
   if(toastNotificationId===n.id)return;
   toastNotificationId=n.id;const m=notificationUiMeta(n);
   box.className='notification-toast '+m.cls;
-  box.innerHTML='<button id="notificationToastClose" class="notification-toast-close" aria-label="Zavřít">×</button><div class="notification-kind">'+notificationKindHtml(m)+'</div><b>'+e(n.title||'Oznámení')+'</b><div>'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+'</div>';
+  box.innerHTML='<button id="notificationToastClose" class="notification-toast-close" aria-label="Zavřít">×</button><div class="notification-kind">'+notificationKindHtml(m)+'</div><b>'+e(n.title||'Oznámení')+'</b><div>'+e(n.body||'')+'</div><div class="small">'+dt(n.createdAt)+(n.byUserName?' · '+e(n.byUserName):'')+'</div>'+(n.taskId?'<button id="notificationToastTask" class="secondary" style="width:100%;margin-top:9px">📋 Otevřít TASK</button>':'');
   box.hidden=false;
   api('notificationSeen',{notificationId:n.id}).catch(()=>{});
   const close=()=>{if(toastTimer)clearTimeout(toastTimer);toastTimer=null;box.hidden=true;toastNotificationId=null;refresh()};
   $('notificationToastClose').onclick=close;
+  if($('notificationToastTask'))$('notificationToastTask').onclick=()=>{const id=n.taskId;close();openSpecificTask(id)};
   if(toastTimer)clearTimeout(toastTimer);
   toastTimer=setTimeout(close,8000);
 }
@@ -679,6 +686,50 @@ function renderHomePulse(){
     openModule(go);
   });
 }
+function taskDateAddDays(iso,days){
+  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!m)return '';
+  const d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3])+days);return localDateISO(d);
+}
+function taskBucket(t){
+  const today=localDateISO(),tomorrow=taskDateAddDays(today,1),date=String(t.date||'');
+  if(date&&date<today)return 'overdue';
+  if(date===today)return 'today';
+  if(date===tomorrow)return 'tomorrow';
+  return 'later';
+}
+function taskBucketMeta(key){return key==='overdue'?{label:'🔴 PO TERMÍNU',cls:'overdue'}:key==='today'?{label:'🟠 DNES',cls:'today'}:key==='tomorrow'?{label:'🔵 ZÍTRA',cls:'tomorrow'}:{label:'⚪ POZDĚJI',cls:'later'}}
+function taskDateLabel(t){
+  const b=taskBucket(t);if(b==='overdue')return 'Po termínu · '+formatTaskCampaignLabel(t.date);if(b==='today')return 'Dnes';if(b==='tomorrow')return 'Zítra';return formatTaskCampaignLabel(t.date);
+}
+function myTaskStatusMeta(t){
+  return t.status==='in_progress'?{label:'PRÁVĚ DĚLÁŠ',icon:'🔵'}:
+    t.status==='completed'?{label:'PNEU/DOT HOTOVO',icon:'🟢'}:
+    t.status==='problem'?{label:'PROBLÉM',icon:'🔴'}:{label:'ČEKÁ NA ZPRACOVÁNÍ',icon:'⚪'};
+}
+function renderHomeAssignedTasks(){
+  const card=$('homeMyTasks'),list=$('homeMyTasksList');if(!card||!list)return;
+  const rows=(D.myTaskSummary||[]).filter((t)=>t.status!=='closed').slice().sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')));
+  card.hidden=!rows.length;if(!rows.length)return;
+  $('homeMyTasksCount').textContent=String(rows.length);
+  list.innerHTML=rows.slice(0,4).map((t)=>{
+    const sm=myTaskStatusMeta(t),season=t.targetSeason==='winter'?'❄️ Zimní':'☀️ Letní';
+    return '<button class="home-task-row" data-home-task="'+e(t.id)+'"><span class="home-task-main"><span class="home-task-title">'+e(t.carPlate||'—')+' · '+season+'</span><span class="home-task-meta">'+e(taskDateLabel(t))+' · '+tireTaskTimeLabel(t)+(t.carName?' · '+e(t.carName):'')+'</span></span><span class="home-task-status">'+sm.icon+' '+sm.label+'</span></button>';
+  }).join('')+(rows.length>4?'<div class="small" style="margin-top:7px">＋ další '+(rows.length-4)+' přiřazené TASKy</div>':'');
+  document.querySelectorAll('[data-home-task]').forEach((b)=>b.onclick=()=>openSpecificTask(b.dataset.homeTask));
+  if($('homeMyTasksOpen'))$('homeMyTasksOpen').onclick=()=>openModule('tiretask');
+}
+function clearTaskUrl(){
+  const u=new URL(location.href);if(!u.searchParams.has('task'))return;
+  u.searchParams.delete('task');history.replaceState(null,'',u.pathname+(u.searchParams.toString()?'?'+u.searchParams:'')+u.hash);
+}
+function openSpecificTask(id){
+  if(!id)return;openModule('tiretask');
+  loadTaskData(false).then(()=>{
+    const esc=CSS.escape(id),el=document.querySelector('.my-task-card[data-my-task-id="'+esc+'"]')||document.querySelector('.tiretask-card[data-task-id="'+esc+'"]');
+    if(el){el.scrollIntoView({behavior:'smooth',block:'center'});el.classList.add('flash-focus');setTimeout(()=>el.classList.remove('flash-focus'),1900)}
+    clearTaskUrl();
+  }).catch(()=>{});
+}
 function hasPneuAccess(){return ['dotCreate','fleetView','historyView','attentionView'].some(can)}
 function openModule(id){
   if(id==='admin'&&me?.role!=='admin')return;
@@ -831,17 +882,37 @@ function tireTaskTimeLabel(t){return t.time?e(t.time):'CELÝ DEN'}
 function renderMyTireTasks(){
   if(!$('tireTaskMineCard')||!$('tireTaskMineList'))return;
   const caps=tireTaskCaps();
-  const rows=(D.tireTasks||[]).filter(t=>t.assignedToUserId===me?.id&&t.status!=='closed').sort((a,b)=>(String(a.date)+'T'+String(a.time||'23:59')).localeCompare(String(b.date)+'T'+String(b.time||'23:59')));
-  $('tireTaskMineCard').hidden=!rows.length;
-  $('tireTaskMineCount').textContent=String(rows.length);
-  $('tireTaskMineList').innerHTML=rows.map(t=>{
-    const sm=tireTaskStatusMeta(t.status),canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id;
-    let buttons='';
-    if(canProgress&&!['completed','closed'].includes(t.status)&&t.status!=='in_progress')buttons+='<button class="tt-start secondary" data-id="'+e(t.id)+'">▶ Rozpracovat</button>';
-    if(can('dotCreate')&&!['completed','closed'].includes(t.status))buttons+='<button class="tt-dot primary" data-id="'+e(t.id)+'">🛞 PNEU/DOT</button>';
-    if(canClose&&t.status==='completed')buttons+='<button class="tt-close primary" data-id="'+e(t.id)+'">✅ Ukončit</button>';
-    if(caps.delete)buttons+='<button class="tt-delete danger-btn" data-id="'+e(t.id)+'">🗑 Smazat</button>';
-    return '<div class="tiretask-mine-item"><div class="tiretask-mine-head"><div><div class="tiretask-mine-title">'+e(t.carPlate||'—')+' · '+(t.targetSeason==='winter'?'❄️ Zimní':'☀️ Letní')+'</div><div class="tiretask-mine-meta">'+e(t.date||'')+' · '+tireTaskTimeLabel(t)+' · '+sm.icon+' '+sm.label+'</div></div></div>'+(t.instructions?'<div class="small" style="margin-top:6px">'+e(t.instructions)+'</div>':'')+(buttons?'<div class="toolbar" style="margin-top:8px">'+buttons+'</div>':'')+'</div>';
+  const rows=(D.tireTasks||[]).filter((t)=>t.assignedToUserId===me?.id&&t.status!=='closed').slice().sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')));
+  $('tireTaskMineCard').hidden=!rows.length;$('tireTaskMineCount').textContent=String(rows.length);
+  if(!rows.length){$('tireTaskMineList').innerHTML='';return}
+  const groups={overdue:[],today:[],tomorrow:[],later:[]};rows.forEach((t,index)=>groups[taskBucket(t)].push({t,index}));
+  $('tireTaskMineList').innerHTML=['overdue','today','tomorrow','later'].map((key)=>{
+    if(!groups[key].length)return '';const gm=taskBucketMeta(key);
+    return '<section class="my-task-group '+gm.cls+'"><div class="my-task-group-title">'+gm.label+'</div>'+groups[key].map(({t,index})=>{
+      const sm=myTaskStatusMeta(t),canProgress=caps.progress||t.assignedToUserId===me?.id,canClose=caps.close||t.assignedToUserId===me?.id;
+      const target=t.targetSeason==='winter'?'❄️ Přezout na ZIMNÍ':'☀️ Přezout na LETNÍ';
+      let actions='';
+      if(t.status==='planned'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ ZAČÍT PRACOVAT</button>';
+      if(t.status==='in_progress'&&can('dotCreate'))actions+='<button class="tt-dot primary wide" data-id="'+e(t.id)+'">🛞 ZAPSAT PNEU / DOT</button>';
+      if(t.status==='problem'&&canProgress)actions+='<button class="tt-start primary wide" data-id="'+e(t.id)+'">▶ POKRAČOVAT V PRÁCI</button>';
+      if(t.status==='problem'&&can('dotCreate'))actions+='<button class="tt-dot secondary" data-id="'+e(t.id)+'">🛞 PNEU / DOT</button>';
+      if(['planned','in_progress'].includes(t.status)&&canProgress)actions+='<button class="tt-problem danger-btn" data-id="'+e(t.id)+'">⚠️ MÁM PROBLÉM</button>';
+      if(t.status==='completed'&&canClose)actions+='<button class="tt-close primary wide" data-id="'+e(t.id)+'">✅ DOKONČIT TASK</button>';
+      const details='<details class="my-task-details"><summary>Více údajů o vozidle</summary><div class="my-task-detail-grid">'+
+        '<div class="my-task-detail"><span>Skupina</span><b>'+e(t.category||t.carCategory||'—')+'</b></div>'+
+        '<div class="my-task-detail"><span>Poslední km</span><b>'+(t.latestMileage===null||t.latestMileage===undefined?'—':Number(t.latestMileage).toLocaleString('cs-CZ')+' km')+'</b></div>'+
+        '<div class="my-task-detail"><span>☀️ Letní DOT</span><b>'+e(t.latestSummerDot||'—')+'</b></div>'+
+        '<div class="my-task-detail"><span>❄️ Zimní DOT</span><b>'+e(t.latestWinterDot||'—')+'</b></div>'+
+      '</div></details>';
+      return '<article class="my-task-card '+e(t.status)+' '+(taskBucket(t)==='overdue'?'overdue':'')+'" data-my-task-id="'+e(t.id)+'">'+
+        '<div class="my-task-head"><div><div class="my-task-order">#'+(index+1)+' V PRACOVNÍ FRONTĚ</div><div class="my-task-plate">'+e(t.carPlate||'—')+'</div><div class="my-task-car">'+e(t.carName||'Bez názvu')+(t.category?' · '+e(t.category):'')+'</div></div><span class="tiretask-status '+e(t.status)+'">'+sm.icon+' '+sm.label+'</span></div>'+
+        '<div class="my-task-when">'+e(taskDateLabel(t))+' · '+tireTaskTimeLabel(t)+'</div><div class="my-task-action-label">'+target+'</div>'+
+        (t.instructions?'<div class="my-task-instructions"><b>📌 Instrukce</b><div style="margin-top:4px">'+e(t.instructions)+'</div></div>':'')+
+        (t.problemNote?'<div class="my-task-problem"><b>⚠️ Nahlášený problém</b><div style="margin-top:4px">'+e(t.problemNote)+'</div></div>':'')+
+        (t.completedRecordId?'<div class="my-task-complete"><b>✅ PNEU/DOT zapsáno</b><div style="margin-top:3px">DOT '+e(t.completedDot||'—')+' · '+Number(t.completedMileage??0).toLocaleString('cs-CZ')+' km</div><div class="small">'+dt(t.completedAt)+'</div></div>':'')+
+        details+(actions?'<div class="my-task-actions">'+actions+'</div>':'')+
+      '</article>';
+    }).join('')+'</section>';
   }).join('');
 }
 function renderTireTask(){
@@ -892,13 +963,24 @@ function renderTireTask(){
   }).join('')||'<div class="card"><div class="small">Nejsou žádné aktivní TASKy.</div></div>';
 
   document.querySelectorAll('.tt-start').forEach(b=>b.onclick=()=>setTireTaskStatus(b.dataset.id,'in_progress'));
-  document.querySelectorAll('.tt-problem').forEach(b=>b.onclick=()=>{const n=prompt('Co je problém?');if(n!==null&&n.trim())setTireTaskStatus(b.dataset.id,'problem',n.trim())});
+  document.querySelectorAll('.tt-problem').forEach(b=>b.onclick=()=>openTaskProblem(b.dataset.id));
   document.querySelectorAll('.tt-dot').forEach(b=>b.onclick=()=>openPneuFromTireTask(b.dataset.id));
   document.querySelectorAll('.tt-edit').forEach(b=>b.onclick=()=>editTireTask(b.dataset.id));
   document.querySelectorAll('.tt-close').forEach(b=>b.onclick=()=>closeTireTask(b.dataset.id));
   document.querySelectorAll('.tt-delete').forEach(b=>b.onclick=()=>deleteTireTask(b.dataset.id));
   document.querySelectorAll('.tt-comment').forEach(b=>b.onclick=()=>addTireTaskComment(b.dataset.id));
   document.querySelectorAll('.tt-assignee-select').forEach(s=>s.onchange=async()=>{try{await api('tireTaskUpdate',{taskId:s.dataset.id,assignedToUserId:s.value});await refresh()}catch(x){alert(errorText(x))}});
+}
+function openTaskProblem(id){
+  const t=(D.tireTasks||[]).find((x)=>x.id===id);if(!t||!$('taskProblemOverlay'))return;
+  taskProblemTaskId=id;$('taskProblemMeta').textContent=(t.carPlate||'TASK')+' · '+(t.targetSeason==='winter'?'zimní':'letní')+' · '+(t.date||'');
+  $('taskProblemText').value=t.status==='problem'?(t.problemNote||''):'';
+  $('taskProblemMsg').innerHTML='';$('taskProblemOverlay').hidden=false;setTimeout(()=>$('taskProblemText').focus(),40);
+}
+function closeTaskProblem(){taskProblemTaskId=null;if($('taskProblemOverlay'))$('taskProblemOverlay').hidden=true}
+async function submitTaskProblem(){
+  const text=$('taskProblemText')?.value.trim();if(!taskProblemTaskId||!text)return note($('taskProblemMsg'),'Popiš prosím problém.','msg err');
+  try{await setTireTaskStatus(taskProblemTaskId,'problem',text);closeTaskProblem()}catch{}
 }
 async function setTireTaskStatus(id,status,problemNote=''){
   try{await api('tireTaskSetStatus',{taskId:id,status,problemNote});await refresh()}catch(x){alert(errorText(x))}
@@ -1024,6 +1106,7 @@ function renderModuleShell(){
   if($('homeNotificationBadge')){$('homeNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('homeNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
   if($('headerNotificationBadge')){$('headerNotificationBadge').textContent=String(D.notificationUnreadCount||0);$('headerNotificationBadge').hidden=!(D.notificationUnreadCount>0)}
   renderHomePulse();
+  renderHomeAssignedTasks();
   renderMainModuleCards();
   document.querySelectorAll('[data-module="pneu"]').forEach(x=>{if(me?.role!=='admin'&&moduleCfg('pneu').visible!==false)x.hidden=!hasPneuAccess()});
   const count=attentionIssues().length;
@@ -1379,6 +1462,9 @@ if($('vehicleOverviewAddCategoryBtn'))$('vehicleOverviewAddCategoryBtn').onclick
   try{await api('vehicleCategoryAdd',{category});$('vehicleOverviewNewCategory').value='';note($('vehicleOverviewCategoryMsg'),'Skupina vozidel byla přidána.','msg ok');await refresh()}catch(x){note($('vehicleOverviewCategoryMsg'),errorText(x),'msg err')}
 };
 if($('historyLoadMore'))$('historyLoadMore').onclick=()=>loadHistoryPage(false);
+if($('taskProblemCancel'))$('taskProblemCancel').onclick=closeTaskProblem;
+if($('taskProblemSubmit'))$('taskProblemSubmit').onclick=submitTaskProblem;
+if($('taskProblemOverlay'))$('taskProblemOverlay').onclick=(ev)=>{if(ev.target===$('taskProblemOverlay'))closeTaskProblem()};
 if($('globalSearchBtn'))$('globalSearchBtn').onclick=openGlobalSearch;
 if($('globalSearchClose'))$('globalSearchClose').onclick=closeGlobalSearch;
 if($('globalSearchInput'))$('globalSearchInput').oninput=()=>{if(globalSearchTimer)clearTimeout(globalSearchTimer);globalSearchTimer=setTimeout(renderGlobalSearch,250)};
