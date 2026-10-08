@@ -1,7 +1,7 @@
 import { put, get, list, del } from '@vercel/blob';
 import crypto from 'node:crypto';
 import webpush from 'web-push';
-import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
+import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, taskDotOrder, taskRequiresBothRecords, taskSeasonRecord, taskSeasonRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
 import { mutateBlobJsonArray, BlobJsonConflictError } from '../lib/blob-json.js';
 
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
@@ -489,6 +489,9 @@ function publicTireTasks(cfg,rows,recs=[]) {
       latestWinterDot:winter?recordDotSummary(winter):'',
       comments:Array.isArray(t.comments)?t.comments.slice(-100):[],
       recordReady:taskRecordReady(t,recs,validateRecordFields),
+      requiresBothRecords:taskRequiresBothRecords(t),
+      seasonRecords:Object.fromEntries(taskDotOrder(t).map(s=>[s,taskSeasonRecord(t,s)]).filter(([,r])=>r)),
+      seasonRecordReady:Object.fromEntries(taskDotOrder(t).map(s=>[s,taskSeasonRecordReady(t,s,recs,validateRecordFields)])),
     };
   }).sort((a,b)=>{
     const aa=String(a.date||'')+'T'+String(a.time||'23:59'), bb=String(b.date||'')+'T'+String(b.time||'23:59');
@@ -778,7 +781,7 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
   const title=first.kind==='carryover'?'Předané vozidlo k dokončení – '+(carById[first.carId]?.plate||'vozidlo'):multi?'Nový denní TASK · '+tasks.length+' vozidel':'Nový TASK – '+(carById[first.carId]?.plate||'vozidlo');
   const body=multi
     ?(first.date||'')+' · '+plates.join(', ')+(tasks.length>4?' +'+(tasks.length-4):'')
-    :(first.date||'')+' · '+(first.time||'celý den')+' · '+(first.targetSeason==='winter'?'zimní':'letní')+' pneu';
+    :(first.date||'')+' · '+(first.time||'celý den')+' · '+taskDotOrder(first).map(s=>s==='summer'?'letní':'zimní').join(' → ')+' DOT';
   const n=await createNotification({
     type:'task_assignment',channel:'automatic',severity:'important',requiresAck:false,title,body,
     recipient:'user',recipientUserIds:[assignee.id],taskId:first.id,taskIds:tasks.map((t)=>t.id),
@@ -1090,7 +1093,7 @@ export default async function handler(req, res) {
       if (error) return json(res, 400, { error });
       if(body.tireTaskId){
         const task=(await getTireTasks()).find(t=>t.id===String(body.tireTaskId));
-        if(!task||!taskIsActive(task)||task.assignedToUserId!==currentUser.id||task.carId!==car.id||task.targetSeason!==season)return json(res,409,{error:'TIRETASK_NOT_ASSIGNED',message:'TASK, vozidlo nebo přiřazení se změnilo. Obnov přehled.'});
+        if(!task||!taskIsActive(task)||task.assignedToUserId!==currentUser.id||task.carId!==car.id)return json(res,409,{error:'TIRETASK_NOT_ASSIGNED',message:'TASK, vozidlo nebo přiřazení se změnilo. Obnov přehled.'});
         if(!task.acceptedAt||task.acceptedById!==currentUser.id||!task.startedAt)return json(res,409,{error:'TIRETASK_NOT_STARTED',message:'Nejdřív přijmi TASK a u vozidla zvol Pracuji na tom.'});
         if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED'});
       }
@@ -1116,7 +1119,7 @@ export default async function handler(req, res) {
     if (TASK_ACTIONS.has(body.action)) {
       const records=['tireTaskCompleteVehicle','tireTaskClose','tireTaskHandover'].includes(body.action)?await getRecords():[];
       try{
-        const out=await mutateTireTasks(rows=>applyTaskAction(rows,body,{cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),uid,now:new Date().toISOString(),today:pragueDate(),records,normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user),validateRecord:validateRecordFields}));
+        const out=await mutateTireTasks(rows=>applyTaskAction(rows,body,{cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),canWriteDot:hasPermission(currentUser,'dotCreate'),uid,now:new Date().toISOString(),today:pragueDate(),records,normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user),validateRecord:validateRecordFields}));
         for(const a of out.audit)await appendAudit(currentUser,a.type,a.message,a.data);
         for(const event of out.events)await notifyTaskEvent(cfg,event,currentUser).catch(error=>console.error('TASK notification',error?.message));
         return json(res,200,out.result);

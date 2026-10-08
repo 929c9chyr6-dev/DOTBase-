@@ -188,3 +188,64 @@ test('deleting an active worker releases the whole daily TASK, including finishe
   const deletion=await ok('admin','adminDeleteUser',{userId:'worker1'});assert.equal(deletion.releasedTasks,1);assert.equal(read('tiretasks.json').every(t=>!t.assignedToUserId),true);
   await ok('admin','tireTaskUpdate',{taskId:tasks[0].id,assignedToUserId:'worker2'});await accept('worker2',tasks);await start('worker2',tasks[1].id);assert.equal(read('tiretasks.json').find(t=>t.id===tasks[0].id).completedById,'worker1');assert.equal(read('tiretasks.json').every(t=>t.assignedToUserId==='worker2'),true);
 });
+
+test('both DOT orders require two linked valid records, preserve each season and allow editable carried mileage including zero',async()=>{
+  for(const order of [['summer','winter'],['winter','summer']]){
+    await seed();const tasks=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:order}]}),t=tasks[0];
+    assert.deepEqual(t.dotOrder,order);assert.equal(t.workflowVersion,3);assert.equal(t.targetSeason,order[1]);
+    await accept('worker1',tasks);await start('worker1',t.id);
+    await record('worker1',t,{season:order[0],mileage:0,requestId:'first-season'});
+    let data=await ok('worker1','taskData'),visible=data.tireTasks.find(x=>x.id===t.id);
+    assert.equal(visible.recordReady,false);assert.equal(visible.seasonRecordReady[order[0]],true);assert.equal(visible.seasonRecordReady[order[1]],false);
+    assert.equal((await call('worker1','tireTaskClose',{taskId:t.id})).body.error,'TIRETASK_NOT_COMPLETED');
+    const first=read('tiretasks.json')[0].seasonRecords[order[0]];
+    await record('worker1',t,{season:order[1],splitDot:true,dot:'',dotFront:'2526',dotRear:'1225',mileage:17,requestId:'second-season'});
+    assert.deepEqual(read('tiretasks.json')[0].seasonRecords[order[0]],first);
+    await record('worker1',t,{season:order[0],mileage:0,requestId:'first-season'});
+    assert.equal(read('tiretasks.json')[0].lastMileage,17,'retrying the first save must not reset newer mileage');
+    assert.equal((await ok('worker1','taskData')).tireTasks[0].recordReady,true);
+    await ok('worker1','tireTaskClose',{taskId:t.id});assert.equal(read('tiretasks.json')[0].status,'closed');
+    assert.deepEqual(read('tiretasks.json')[0].dotOrder,order);assert.equal(read('records-index.json').rows.length,2);
+  }
+});
+
+test('dual DOT drafts are independent by season and late autosaves cannot replace the newer values of either set',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['summer','winter']}]});await accept('worker1',[t]);await start('worker1',t.id);
+  await ok('worker1','tireTaskSaveDraft',{taskId:t.id,draftClientId:'same-device',draftSequence:2,draft:{season:'summer',dot:'2426',mileage:'123456'}});
+  await ok('worker1','tireTaskSaveDraft',{taskId:t.id,draftClientId:'same-device',draftSequence:1,draft:{season:'winter',splitDot:true,dotFront:'25',mileage:'123456'}});
+  await ok('worker1','tireTaskSaveDraft',{taskId:t.id,draftClientId:'same-device',draftSequence:1,draft:{season:'summer',dot:'12',mileage:'5'}});
+  const row=read('tiretasks.json')[0];assert.equal(row.drafts.summer.dot,'2426');assert.equal(row.drafts.summer.mileage,'123456');assert.equal(row.drafts.winter.dotFront,'25');
+  assert.equal((await call('worker1','tireTaskSaveDraft',{taskId:t.id,draft:{season:'other',dot:'2426'}})).body.error,'SEASON');
+  assert.equal((await call('admin','tireTaskUpdate',{taskId:t.id,dotOrder:['winter','summer']})).body.error,'TIRETASK_STARTED');
+});
+
+test('overnight dual DOT keeps the first record, mileage and second draft; next worker finishes only the remaining set',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['winter','summer']}]});
+  const daily=await create('worker2',tomorrow(),['car5']);await accept('worker1',[t]);await start('worker1',t.id);
+  await record('worker1',t,{season:'winter',dot:'2426',mileage:123456});const first=read('tiretasks.json').find(x=>x.id===t.id).seasonRecords.winter;
+  await ok('worker1','tireTaskSaveDraft',{taskId:t.id,draft:{season:'summer',dot:'25',mileage:'123456'}});
+  const handover=await ok('worker1','tireTaskHandover',{taskId:t.id,staysAtService:true});
+  const solo=read('tiretasks.json').find(x=>x.id===handover.continuationTaskId);assert.deepEqual(solo.dotOrder,['winter','summer']);assert.deepEqual(solo.seasonRecords.winter,first);assert.equal(solo.drafts.summer.dot,'25');assert.equal(solo.lastMileage,123456);
+  await accept('worker2',[solo]);await start('worker2',solo.id);assert.equal((await call('worker2','tireTaskClose',{taskId:solo.id})).body.error,'TIRETASK_NOT_COMPLETED');
+  await record('worker2',solo,{season:'summer',dot:'2526',mileage:123500});await ok('worker2','tireTaskClose',{taskId:solo.id});
+  const origin=read('tiretasks.json').find(x=>x.id===t.id);assert.deepEqual(origin.seasonRecords.winter,first);assert.equal(origin.seasonRecords.summer.savedById,'worker2');assert.equal(origin.workClosedById,'worker1');assert.equal(origin.status,'closed');
+  assert.equal(read('tiretasks.json').find(x=>x.id===daily[0].id).status,'planned');
+});
+
+test('DOT order is validated and saving another vehicle or an ambient record cannot satisfy either required set',async()=>{
+  await seed();
+  for(const dotOrder of [['winter','winter'],['winter'],['summer','other']])assert.equal((await call('admin','tireTaskCreateBatch',{date:today(),entries:[{carId:'car1',category:'VIP',dotOrder}]})).body.error,'SEASON');
+  const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['summer','winter']}]});await accept('worker1',[t]);await start('worker1',t.id);
+  await ok('worker1','addRecord',{carId:t.carId,season:'summer',dot:'2426',mileage:1});assert.equal((await ok('worker1','taskData')).tireTasks[0].seasonRecordReady.summer,false);
+  await record('worker1',t,{season:'summer'});assert.equal((await call('worker2','addRecord',{carId:t.carId,season:'winter',dot:'2426',mileage:1,tireTaskId:t.id})).status,409);
+  await ok('admin','adminUpdateUser',{userId:'worker1',permissions:{dotCreate:false}});assert.equal((await call('worker1','addRecord',{carId:t.carId,season:'winter',dot:'2426',mileage:1,tireTaskId:t.id})).status,403);
+  assert.equal((await call('worker1','tireTaskSaveDraft',{taskId:t.id,draft:{season:'winter',dot:'2426',mileage:'1'}})).status,403);
+});
+
+test('editing a saved set must be saved before completion; prior valid records cannot hide pending changes',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['summer','winter']}]});await accept('worker1',[t]);await start('worker1',t.id);
+  await record('worker1',t,{season:'summer'});await record('worker1',t,{season:'winter'});
+  await ok('worker1','tireTaskSaveDraft',{taskId:t.id,draft:{season:'winter',dot:'',mileage:'120001'}});
+  assert.equal((await ok('worker1','taskData')).tireTasks[0].recordReady,false);assert.equal((await call('worker1','tireTaskClose',{taskId:t.id})).body.error,'TIRETASK_NOT_COMPLETED');
+  await record('worker1',t,{season:'winter',dot:'2526',mileage:120001});assert.equal((await ok('worker1','taskData')).tireTasks[0].recordReady,true);await ok('worker1','tireTaskClose',{taskId:t.id});
+});
