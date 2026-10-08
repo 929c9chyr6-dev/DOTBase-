@@ -1226,8 +1226,8 @@ function systemModeHelp(mode){
 function renderHibernationAccessControls(){
   const list=$('hibernationUserList');if(!list)return;
   const allowed=new Set(D.system?.hibernationAllowedUserIds||[]),users=(D.users||[]).filter(u=>u.active&&u.role!=='admin');
-  list.innerHTML=users.length?users.map(u=>'<label class="hibernation-user-choice"><input class="hibernation-user-toggle" type="checkbox" value="'+e(u.id)+'" '+(allowed.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span><span class="hibernation-state">'+(allowed.has(u.id)?'🟢 ONLINE':'⚫ OFFLINE')+'</span></label>').join(''):'<div class="small">Nejsou k dispozici žádní aktivní uživatelé.</div>';
-  list.querySelectorAll('.hibernation-user-toggle').forEach(x=>x.onchange=()=>{const state=x.closest('.hibernation-user-choice')?.querySelector('.hibernation-state');if(state)state.textContent=x.checked?'🟢 ONLINE':'⚫ OFFLINE'});
+  list.innerHTML=users.length?users.map(u=>'<label class="hibernation-user-choice '+(allowed.has(u.id)?'is-online':'is-offline')+'"><input class="hibernation-user-toggle" type="checkbox" value="'+e(u.id)+'" '+(allowed.has(u.id)?'checked':'')+'><span class="hibernation-check" aria-hidden="true"></span><span class="hibernation-user-main"><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span><span class="hibernation-state">'+(allowed.has(u.id)?'ONLINE':'OFFLINE')+'</span></label>').join(''):'<div class="small">Nejsou k dispozici žádní aktivní uživatelé.</div>';
+  list.querySelectorAll('.hibernation-user-toggle').forEach(x=>x.onchange=()=>{const row=x.closest('.hibernation-user-choice'),state=row?.querySelector('.hibernation-state');if(!row||!state)return;row.classList.toggle('is-online',x.checked);row.classList.toggle('is-offline',!x.checked);state.textContent=x.checked?'ONLINE':'OFFLINE'});
 }
 function updateSystemModeEditor(resetNotify=false){
   if(!$('systemMode'))return;
