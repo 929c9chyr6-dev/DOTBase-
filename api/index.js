@@ -1000,7 +1000,7 @@ export default async function handler(req, res) {
     if(body.action==='taskData'){
       const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView');
       const publicRows=publicTireTasks(cfg,rows,recs),visibleRows=canCompletedView?publicRows:publicRows.filter((t)=>t.status!=='closed');
-      return json(res,200,{tireTasks:visibleRows,tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[],tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
+      return json(res,200,{tireTasks:visibleRows,tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[],tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
     }
     if(body.action==='notificationData'){
       return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
