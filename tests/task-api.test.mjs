@@ -2,9 +2,41 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {seed,call,ok,create,start,record,read,put,today,tomorrow} from './task-fixture.mjs';
 import {taskGroups} from '../lib/task-workflow.js';
+import {get,head,BlobPreconditionFailedError} from './blob-mock.mjs';
+import {mutateBlobJsonArray} from '../lib/blob-json.js';
 
 async function accept(user,tasks){await ok(user,'tireTaskAccept',{taskId:tasks[0].id})}
 async function finishFirstThree(tasks){for(const t of tasks.slice(0,-1)){await start('worker1',t.id);await record('worker1',t);await ok('worker1','tireTaskCompleteVehicle',{taskId:t.id})}}
+
+test('creating a TASK uses the storage ETag despite weak download ETags and preserves existing history',async()=>{
+  await seed();
+  const legacy={id:'old-task',carId:'car9',status:'closed',date:'2026-01-01',instructions:'Existing archived work'};
+  await put('tiretasks.json',JSON.stringify([legacy]),{allowOverwrite:true});
+  const metadata=await head('tiretasks.json'),download=await get('tiretasks.json');
+  assert.equal(download.blob.etag,'W/'+metadata.etag);
+  await assert.rejects(put('tiretasks.json','[]',{allowOverwrite:true,ifMatch:download.blob.etag}),BlobPreconditionFailedError);
+  const tasks=await create();
+  assert.equal(tasks.length,4);assert.equal(read('tiretasks.json').length,5);
+  assert.deepEqual(read('tiretasks.json').find(t=>t.id===legacy.id),legacy);
+  assert.equal(read('notifications.json').filter(n=>n.type==='task_assignment').length,1);
+});
+
+test('an overwrite between metadata and write retries against fresh state without losing the other update',async()=>{
+  await seed();let attempts=0;
+  await mutateBlobJsonArray('tiretasks.json',async rows=>{
+    attempts++;
+    if(attempts===1)await put('tiretasks.json',JSON.stringify([{id:'other-update'}]),{allowOverwrite:true});
+    return {rows:[...rows,{id:'my-update'}],changed:true};
+  });
+  assert.equal(attempts,2);
+  assert.deepEqual(read('tiretasks.json').map(x=>x.id),['other-update','my-update']);
+});
+
+test('two simultaneous first writes retry the real already-exists error and keep both entries',async()=>{
+  await seed();
+  await Promise.all(['first','second'].map(id=>mutateBlobJsonArray('new-array.json',rows=>({rows:[...rows,{id}],changed:true}))));
+  assert.deepEqual(read('new-array.json').map(x=>x.id).sort(),['first','second']);
+});
 
 test('one daily TASK: accept once, explicitly finish each car, finish last car and group together',async()=>{
   await seed();const tasks=await create();await accept('worker1',tasks);await accept('worker1',tasks);

@@ -1,7 +1,8 @@
-import { put, get, list, del, BlobPreconditionFailedError, BlobNotFoundError } from '@vercel/blob';
+import { put, get, list, del } from '@vercel/blob';
 import crypto from 'node:crypto';
 import webpush from 'web-push';
 import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
+import { mutateBlobJsonArray, BlobJsonConflictError } from '../lib/blob-json.js';
 
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
@@ -447,23 +448,15 @@ async function writeTireTasks(rows) {
   await touchSyncVersion();
 }
 async function mutateJsonArray(path,mutate) {
-  // Conditional writes protect simultaneous work on different cars. Retrying
-  // re-applies the transition to fresh state, including its idempotency checks.
-  for(let attempt=0;attempt<6;attempt++){
-    let snapshot=null;
-    try{snapshot=await get(path,{access:'private',useCache:false})}catch(error){if(!(error instanceof BlobNotFoundError))throw error}
-    const rows=snapshot?.statusCode===200?JSON.parse(await new Response(snapshot.stream).text()):[];
-    const out=await mutate(Array.isArray(rows)?rows:[]);
-    if(!out.changed)return out;
-    try{
-      await put(path,JSON.stringify(out.rows),{access:'private',addRandomSuffix:false,allowOverwrite:!!snapshot,contentType:'application/json',...(snapshot?{ifMatch:snapshot.blob.etag}:{})});
-    }catch(error){
-      if(error instanceof BlobPreconditionFailedError||(!snapshot&&error.name==='BlobPathnameMismatchError'))continue;
-      throw error;
-    }
-    await touchSyncVersion();return out;
+  let out;
+  try{
+    out=await mutateBlobJsonArray(path,mutate);
+  }catch(error){
+    if(error instanceof BlobJsonConflictError)throw new TaskError('TIRETASK_CONFLICT','TASK mezitím změnil jiný uživatel. Obnov přehled a zopakuj akci.');
+    throw error;
   }
-  throw new TaskError('TIRETASK_CONFLICT','TASK mezitím změnil jiný uživatel. Obnov přehled a zopakuj akci.');
+  if(out.changed)await touchSyncVersion();
+  return out;
 }
 async function mutateTireTasks(mutate){return mutateJsonArray('tiretasks.json',mutate)}
 function publicTireTasks(cfg,rows,recs=[]) {
