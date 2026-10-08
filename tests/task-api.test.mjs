@@ -249,3 +249,76 @@ test('editing a saved set must be saved before completion; prior valid records c
   assert.equal((await ok('worker1','taskData')).tireTasks[0].recordReady,false);assert.equal((await call('worker1','tireTaskClose',{taskId:t.id})).body.error,'TIRETASK_NOT_COMPLETED');
   await record('worker1',t,{season:'winter',dot:'2526',mileage:120001});assert.equal((await ok('worker1','taskData')).tireTasks[0].recordReady,true);await ok('worker1','tireTaskClose',{taskId:t.id});
 });
+
+test('only admin deletes by default; create, edit and delete rights can be delegated and revoked independently',async()=>{
+  await seed();const tasks=await create();
+  assert.equal((await ok('admin','taskData')).tireTaskCapabilities.delete,true);
+  assert.equal((await ok('dispatch','taskData')).tireTaskCapabilities.delete,false);
+  assert.equal((await call('dispatch','tireTaskDelete',{taskId:tasks[0].id})).status,403);
+  await ok('admin','adminUpdateUser',{userId:'worker2',role:'dispatch',permissions:{tireTaskCreate:true,tireTaskEdit:false,tireTaskDelete:false,tireTaskCompletedView:false}});
+  assert.equal((await call('worker2','tireTaskUpdate',{taskId:tasks[0].id,instructions:'Forbidden'})).status,403);
+  assert.equal((await call('worker2','tireTaskDelete',{taskId:tasks[0].id})).status,403);
+  await ok('admin','adminUpdateUser',{userId:'worker2',permissions:{tireTaskDelete:true,tireTaskEdit:false,tireTaskCreate:false,tireTaskCompletedView:false}});
+  let data=await ok('worker2','taskData');assert.equal(data.tireTaskCapabilities.delete,true);assert.equal(data.tireTaskCapabilities.edit,false);assert.equal(data.tireTaskCapabilities.create,false);
+  assert.equal((await call('worker2','tireTaskUpdate',{taskId:tasks[0].id,instructions:'Still forbidden'})).status,403);
+  await ok('worker2','tireTaskDelete',{taskId:tasks[0].id});assert.equal(read('tiretasks.json').length,0);
+  const next=await create();await ok('admin','adminUpdateUser',{userId:'worker2',permissions:{tireTaskDelete:false}});assert.equal((await call('worker2','tireTaskDelete',{taskId:next[0].id})).status,403);
+});
+
+test('plans, started work and completed history can be edited without changing recorded work, ownership, or DOT evidence',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['summer','winter']}]});
+  await ok('admin','tireTaskUpdate',{taskId:t.id,time:'08:30',instructions:'Planned edit'});await accept('worker1',[t]);await start('worker1',t.id);
+  await ok('admin','tireTaskUpdate',{taskId:t.id,date:tomorrow(),time:'09:00',category:'POOL',instructions:'Started edit'});
+  await record('worker1',t,{season:'summer'});await record('worker1',t,{season:'winter'});await ok('worker1','tireTaskClose',{taskId:t.id});
+  const before=structuredClone(read('tiretasks.json')[0]),records=JSON.stringify(read('records-index.json'));
+  await ok('dispatch','tireTaskUpdate',{taskId:t.id,date:today(),time:'10:15',category:'VIP',instructions:'Corrected vehicle instruction',batchInstructions:'Corrected history'});
+  const after=read('tiretasks.json')[0];assert.equal(after.instructions,'Corrected vehicle instruction');assert.equal(after.batchInstructions,'Corrected history');assert.equal(after.time,'10:15');assert.equal(after.status,'closed');
+  for(const key of ['seasonRecords','drafts','acceptedAt','acceptedById','startedAt','startedById','completedAt','completedById','closedAt','workClosedAt','workClosedById','assignedToUserId','carId','dotOrder'])assert.deepEqual(after[key],before[key],key);
+  assert.equal(JSON.stringify(read('records-index.json')),records);
+  assert.equal((await call('admin','tireTaskUpdate',{taskId:t.id,carId:'car2'})).body.error,'TIRETASK_STARTED');assert.equal((await call('admin','tireTaskUpdate',{taskId:t.id,assignedToUserId:'worker2'})).body.error,'TIRETASK_STARTED');
+});
+
+test('planned, accepted, started and completed TASKs can be deleted as entire groups; records and unrelated TASKs are retained',async()=>{
+  for(const phase of ['planned','accepted','started','completed']){
+    await seed();const tasks=await create(),other=await create('worker2',tomorrow(),['car5']);
+    if(phase!=='planned')await accept('worker1',tasks);
+    if(['started','completed'].includes(phase)){await start('worker1',tasks[0].id);await record('worker1',tasks[0])}
+    if(phase==='completed'){for(const t of tasks.slice(1)){await start('worker1',t.id);await record('worker1',t);await ok('worker1','tireTaskCompleteVehicle',{taskId:t.id})}await ok('worker1','tireTaskClose',{taskId:tasks[0].id})}
+    const records=JSON.stringify(read('records-index.json'));const deleted=await ok('admin','tireTaskDelete',{taskId:tasks[2].id});assert.equal(deleted.deletedTaskIds.length,4);assert.deepEqual(read('tiretasks.json').map(t=>t.id),[other[0].id]);assert.equal(JSON.stringify(read('records-index.json')),records);
+    const state=await ok('worker1','state');assert.equal(state.myTaskCount,0);assert.equal(state.toastNotifications.some(n=>deleted.deletedTaskIds.includes(n.taskId)),false);
+    assert.equal(read('notifications.json').filter(n=>deleted.deletedTaskIds.includes(n.taskId)).every(n=>n.retractedAt),true);
+  }
+});
+
+test('a user with delete permission alone sees completed TASKs and may delete them without edit or general history permission',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1']);await accept('worker1',[t]);await start('worker1',t.id);await record('worker1',t);await ok('worker1','tireTaskClose',{taskId:t.id});
+  assert.equal((await ok('worker2','taskData')).tireTasks.some(x=>x.id===t.id),false);
+  await ok('admin','adminUpdateUser',{userId:'worker2',permissions:{tireTaskDelete:true,tireTaskEdit:false,tireTaskCreate:false,tireTaskCompletedView:false}});
+  const data=await ok('worker2','taskData');assert.equal(data.tireTaskCompletedView,true);assert.equal(data.tireTasks.some(x=>x.id===t.id),true);assert.equal(data.tireTaskCapabilities.edit,false);
+  await ok('worker2','tireTaskDelete',{taskId:t.id});assert.equal(read('tiretasks.json').length,0);assert.equal(read('records-index.json').rows.length,1);
+});
+
+test('deleting an origin preserves an independent continuation with both seasonal data and its next-day daily TASK',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1'],{entries:[{carId:'car1',category:'VIP',dotOrder:['summer','winter']}]});await accept('worker1',[t]);await start('worker1',t.id);await record('worker1',t,{season:'summer'});
+  const daily=await create('worker2',tomorrow(),['car5']),h=await ok('worker1','tireTaskHandover',{taskId:t.id,staysAtService:true});
+  const saved=structuredClone(read('tiretasks.json').find(t=>t.id===h.continuationTaskId).seasonRecords.summer);
+  await ok('admin','tireTaskDelete',{taskId:t.id});const solo=read('tiretasks.json').find(t=>t.id===h.continuationTaskId);assert.equal(solo.sourceTaskId,null);assert.equal(solo.originBatchId,null);assert.ok(solo.sourceTaskRemovedAt);assert.deepEqual(solo.seasonRecords.summer,saved);
+  assert.equal((await call('admin','tireTaskUpdate',{taskId:solo.id,carId:'car2'})).body.error,'TIRETASK_STARTED');assert.equal((await call('admin','tireTaskUpdate',{taskId:solo.id,dotOrder:['winter','summer']})).body.error,'TIRETASK_STARTED');
+  await accept('worker2',[solo]);await start('worker2',solo.id);await record('worker2',solo,{season:'winter'});await ok('worker2','tireTaskClose',{taskId:solo.id});assert.equal(read('tiretasks.json').find(t=>t.id===daily[0].id).status,'planned');assert.equal(read('tiretasks.json').find(t=>t.id===solo.id).status,'closed');
+});
+
+test('deleting the remaining solo cancels completion in the source history and never marks missing DOT as completed',async()=>{
+  await seed();const [t]=await create('worker1',today(),['car1']);await accept('worker1',[t]);await start('worker1',t.id);
+  const h=await ok('worker1','tireTaskHandover',{taskId:t.id,staysAtService:true,receiverId:'worker2'}),before=read('tiretasks.json').find(x=>x.id===t.id);
+  await ok('admin','tireTaskDelete',{taskId:h.continuationTaskId});const source=read('tiretasks.json')[0],group=taskGroups([source])[0];assert.equal(source.status,'cancelled');assert.equal(source.handoverTaskId,undefined);assert.equal(source.workClosedAt,before.workClosedAt);assert.equal(group.systemResolved,true);assert.equal(group.systemCompleted,false);assert.equal(group.cancelledCount,1);assert.equal((await ok('worker1','state')).taskSummary.active,0);
+  await ok('admin','tireTaskUpdate',{taskId:source.id,instructions:'Completion cancelled; records preserved'});assert.equal(read('tiretasks.json')[0].status,'cancelled');
+});
+
+test('deleting an intermediate handover reconnects survivors; deleting a finished solo preserves completed evidence without dangling links',async()=>{
+  await seed();const [first]=await create('worker1',today(),['car1']);await accept('worker1',[first]);await start('worker1',first.id);
+  const h1=await ok('worker1','tireTaskHandover',{taskId:first.id,staysAtService:true,receiverId:'worker2'}),middle=read('tiretasks.json').find(t=>t.id===h1.continuationTaskId);
+  await accept('worker2',[middle]);await start('worker2',middle.id);const h2=await ok('worker2','tireTaskHandover',{taskId:middle.id,staysAtService:true,receiverId:'worker1'});
+  await ok('admin','tireTaskDelete',{taskId:middle.id});let rows=read('tiretasks.json'),last=rows.find(t=>t.id===h2.continuationTaskId);assert.equal(last.sourceTaskId,first.id);assert.equal(rows.find(t=>t.id===first.id).handoverTaskId,last.id);
+  await accept('worker1',[last]);await start('worker1',last.id);await record('worker1',last);await ok('worker1','tireTaskClose',{taskId:last.id});const records=JSON.stringify(read('records-index.json'));
+  await ok('admin','tireTaskDelete',{taskId:last.id});rows=read('tiretasks.json');assert.equal(rows[0].status,'closed');assert.equal(rows[0].completedDot,'2426');assert.equal(rows[0].handoverTaskId,undefined);assert.equal(rows[0].finishedByContinuationId,undefined);assert.equal(JSON.stringify(read('records-index.json')),records);
+});

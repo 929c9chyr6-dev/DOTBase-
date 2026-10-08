@@ -139,7 +139,7 @@ function effectivePermissions(user) {
   const out = user?.role === 'test'
     ? Object.fromEntries(PERMISSION_KEYS.map((k)=>[k,false]))
     : { ...BASE_PERMISSIONS };
-  if(user?.role==='dispatch'){out.tireTaskCompletedView=true;out.tireTaskDelete=true}
+  if(user?.role==='dispatch')out.tireTaskCompletedView=true;
   for (const k of PERMISSION_KEYS) if (typeof user?.permissions?.[k] === 'boolean') out[k] = user.permissions[k];
   return out;
 }
@@ -695,7 +695,7 @@ async function publicState(cfg,recs,currentUser){
     vehicleCategories:cfg.vehicleCategories||DEFAULT_VEHICLE_CATEGORIES,
     cars:cfg.cars.filter((c)=>c.active!==false),
     records,recordTotal:recs.length,
-    taskSummary:{active:grouped.filter(t=>!t.systemCompleted).length},
+    taskSummary:{active:grouped.filter(t=>!t.systemResolved).length},
     myTaskSummary,myTaskCount:myActiveTasks.length,
     attentionIssueCount:issues.length,
     tireTaskCapabilities:tireTaskCapabilities(currentUser),
@@ -1009,7 +1009,7 @@ export default async function handler(req, res) {
       return json(res,200,{records:compact,recordTotal:recs.length,seasonRecords:buildSeasonRecordEvidence(recs),attentionIssues:issues.slice(0,100),attentionIssueCount:issues.length,pneuTasks,recordUsers:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
     }
     if(body.action==='taskData'){
-      const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView');
+      const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView')||caps.edit||caps.delete;
       const publicRows=publicTireTasks(cfg,rows,recs),myOrigins=new Set(publicRows.filter(t=>t.assignedToUserId===currentUser.id&&t.originBatchId).map(t=>t.originBatchId));
       for(const assigned of publicRows.filter(t=>t.assignedToUserId===currentUser.id)){
         let id=assigned.sourceTaskId;const seen=new Set();while(id&&!seen.has(id)){seen.add(id);const source=publicRows.find(t=>t.id===id);if(!source)break;myOrigins.add(taskGroupId(source));id=source.sourceTaskId}
@@ -1120,6 +1120,10 @@ export default async function handler(req, res) {
       const records=['tireTaskCompleteVehicle','tireTaskClose','tireTaskHandover'].includes(body.action)?await getRecords():[];
       try{
         const out=await mutateTireTasks(rows=>applyTaskAction(rows,body,{cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),canWriteDot:hasPermission(currentUser,'dotCreate'),uid,now:new Date().toISOString(),today:pragueDate(),records,normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user),validateRecord:validateRecordFields}));
+        if(out.result.deletedTaskIds?.length){
+          const ids=new Set(out.result.deletedTaskIds),at=new Date().toISOString();
+          await mutateJsonArray('notifications.json',rows=>{let changed=false;for(const n of rows){if(!n.retractedAt&&(ids.has(n.taskId)||(n.taskIds||[]).some(id=>ids.has(id)))){n.retractedAt=at;n.retractedBy=currentUser.name;n.retractedById=currentUser.id;changed=true}}return {rows,changed}});
+        }
         for(const a of out.audit)await appendAudit(currentUser,a.type,a.message,a.data);
         for(const event of out.events)await notifyTaskEvent(cfg,event,currentUser).catch(error=>console.error('TASK notification',error?.message));
         return json(res,200,out.result);
