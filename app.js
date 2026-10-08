@@ -874,11 +874,21 @@ function ensureTireTaskDraft(){if(!tireTaskDraftRows.length)tireTaskDraftRows=[n
 function tireTaskCategoryOptions(selected=''){
   return '<option value="">Vyber skupinu…</option>'+(D.vehicleCategories||[]).map(x=>'<option value="'+e(x)+'" '+(x===selected?'selected':'')+'>'+e(x)+'</option>').join('');
 }
+function tireTaskPlateQuery(v){return String(v||'').trim().toLocaleUpperCase('cs-CZ').replace(/\s+/g,'')}
+function tireTaskDraftCarMatches(row){
+  const q=tireTaskPlateQuery(row.search),category=String(row.category||'');
+  return (D.cars||[]).filter(c=>(!category||c.category===category)&&(!q||tireTaskPlateQuery(c.plate).startsWith(q))).sort((a,b)=>String(a.plate||'').localeCompare(String(b.plate||''),'cs'));
+}
 function tireTaskDraftCarOptions(row){
-  const q=String(row.search||'').trim().toLocaleUpperCase('cs-CZ'),category=String(row.category||'');
-  const cars=(D.cars||[]).filter(c=>(!category||c.category===category)&&(!q||[c.plate,c.name,c.vin,c.category].join(' ').toLocaleUpperCase('cs-CZ').includes(q)));
-  const label=cars.length?'Vyber vozidlo…':category?'Ve skupině nejsou odpovídající vozidla':'Žádné vozidlo nenalezeno';
+  const cars=tireTaskDraftCarMatches(row);
+  const label=cars.length?'Vyber vozidlo…':row.category?'Ve skupině nejsou odpovídající vozidla':'Žádné vozidlo nenalezeno';
   return '<option value="">'+label+'</option>'+cars.map(c=>'<option value="'+e(c.id)+'" '+(c.id===row.carId?'selected':'')+'>'+e(c.plate)+' — '+e(c.name||'')+(c.category?' · '+e(c.category):'')+'</option>').join('');
+}
+function tireTaskDraftSuggestions(row){
+  const q=tireTaskPlateQuery(row.search);if(!q)return '';
+  const cars=tireTaskDraftCarMatches(row).slice(0,8);
+  if(!cars.length)return '<div class="tt-plan-suggestion-empty">Žádná SPZ nezačíná na <b>'+e(q)+'</b></div>';
+  return cars.map(c=>'<button type="button" class="tt-plan-suggestion" data-car-id="'+e(c.id)+'"><span class="tt-plan-suggestion-plate">'+e(c.plate)+'</span><span class="tt-plan-suggestion-meta">'+e(c.name||'Bez názvu')+(c.category?' · '+e(c.category):'')+'</span></button>').join('');
 }
 function collectTireTaskDraftRows(){
   if(!$('tireTaskRows'))return tireTaskDraftRows;
@@ -899,7 +909,7 @@ function renderTireTaskDraft(){
     '<div class="tiretask-plan-row-head"><b>Vozidlo '+(index+1)+'</b>'+(tireTaskDraftRows.length>1?'<button class="tt-plan-remove danger-btn" data-key="'+e(row.key)+'">✕ Odebrat</button>':'')+'</div>'+
     '<div class="tiretask-plan-grid">'+
       '<div><div class="filter-label">Čas</div><input class="tt-plan-time" type="time" value="'+e(row.time)+'"><div class="small" style="margin-top:3px">Prázdné = celý den</div></div>'+
-      '<div><div class="filter-label">Vozidlo</div><div class="search-wrap"><span class="search-icon">🔎</span><input class="tt-plan-search" type="search" autocomplete="off" value="'+e(row.search)+'" placeholder="Hledat podle SPZ…"></div><select class="tt-plan-car">'+tireTaskDraftCarOptions(row)+'</select></div>'+
+      '<div><div class="filter-label">Vozidlo</div><div class="tt-plan-search-box"><div class="search-wrap"><span class="search-icon">🔎</span><input class="tt-plan-search" type="search" autocomplete="off" autocapitalize="characters" spellcheck="false" value="'+e(row.search)+'" placeholder="Začni psát SPZ, např. AX…"></div><div class="tt-plan-suggestions" '+(tireTaskPlateQuery(row.search)?'':'hidden')+'>'+tireTaskDraftSuggestions(row)+'</div></div><select class="tt-plan-car">'+tireTaskDraftCarOptions(row)+'</select></div>'+
       '<div><div class="filter-label">Skupina</div><select class="tt-plan-category">'+tireTaskCategoryOptions(row.category)+'</select></div>'+
       '<div><div class="filter-label">Přezout na</div><select class="tt-plan-season"><option value="winter" '+(row.targetSeason==='winter'?'selected':'')+'>❄️ Zimní</option><option value="summer" '+(row.targetSeason==='summer'?'selected':'')+'>☀️ Letní</option></select></div>'+
     '</div></div>').join('');
@@ -907,11 +917,24 @@ function renderTireTaskDraft(){
   $('addTireTaskRow').disabled=tireTaskDraftRows.length>=6;
   document.querySelectorAll('.tiretask-plan-row').forEach(el=>{
     const key=el.dataset.key,row=tireTaskDraftRows.find(x=>x.key===key);
-    const search=el.querySelector('.tt-plan-search'),carSel=el.querySelector('.tt-plan-car'),catSel=el.querySelector('.tt-plan-category');
-    search.oninput=()=>{row.search=search.value;row.carId=carSel.value;carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId&&[...carSel.options].some(o=>o.value===row.carId))carSel.value=row.carId;else row.carId=''};
-    carSel.onchange=()=>{row.carId=carSel.value;const car=(D.cars||[]).find(c=>c.id===row.carId);if(car?.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category;carSel.innerHTML=tireTaskDraftCarOptions(row);carSel.value=row.carId}};
+    const search=el.querySelector('.tt-plan-search'),suggestions=el.querySelector('.tt-plan-suggestions'),carSel=el.querySelector('.tt-plan-car'),catSel=el.querySelector('.tt-plan-category');
+    const refreshCarSearch=()=>{
+      const current=row.carId;carSel.innerHTML=tireTaskDraftCarOptions(row);
+      if(current&&[...carSel.options].some(o=>o.value===current))carSel.value=current;else{row.carId='';carSel.value=''}
+      suggestions.innerHTML=tireTaskDraftSuggestions(row);suggestions.hidden=!tireTaskPlateQuery(row.search);
+      suggestions.querySelectorAll('.tt-plan-suggestion').forEach(b=>b.onclick=()=>{
+        const car=(D.cars||[]).find(c=>c.id===b.dataset.carId);if(!car)return;
+        row.carId=car.id;row.search=car.plate||'';search.value=row.search;
+        if(car.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category}
+        carSel.innerHTML=tireTaskDraftCarOptions(row);carSel.value=row.carId;suggestions.hidden=true;
+      });
+    };
+    search.oninput=()=>{row.search=search.value;const selected=(D.cars||[]).find(c=>c.id===row.carId);if(selected&&tireTaskPlateQuery(search.value)!==tireTaskPlateQuery(selected.plate))row.carId='';refreshCarSearch()};
+    search.onfocus=()=>{row.search=search.value;if(tireTaskPlateQuery(row.search)){suggestions.innerHTML=tireTaskDraftSuggestions(row);suggestions.hidden=false}};
+    search.onblur=()=>setTimeout(()=>suggestions.hidden=true,140);
+    carSel.onchange=()=>{row.carId=carSel.value;const car=(D.cars||[]).find(c=>c.id===row.carId);if(car){row.search=car.plate||'';search.value=row.search;suggestions.hidden=true}if(car?.category&&(D.vehicleCategories||[]).includes(car.category)){row.category=car.category;catSel.value=car.category;carSel.innerHTML=tireTaskDraftCarOptions(row);carSel.value=row.carId}};
     el.querySelector('.tt-plan-time').onchange=x=>row.time=x.target.value;
-    catSel.onchange=x=>{row.category=x.target.value;const selected=(D.cars||[]).find(c=>c.id===row.carId);if(selected&&row.category&&selected.category!==row.category)row.carId='';carSel.innerHTML=tireTaskDraftCarOptions(row);if(row.carId)carSel.value=row.carId};
+    catSel.onchange=x=>{row.category=x.target.value;const selected=(D.cars||[]).find(c=>c.id===row.carId);if(selected&&row.category&&selected.category!==row.category){row.carId='';row.search='';search.value=''}refreshCarSearch()};
     el.querySelector('.tt-plan-season').onchange=x=>row.targetSeason=x.target.value;
   });
   document.querySelectorAll('.tt-plan-remove').forEach(b=>b.onclick=()=>{collectTireTaskDraftRows();tireTaskDraftRows=tireTaskDraftRows.filter(x=>x.key!==b.dataset.key);ensureTireTaskDraft();renderTireTaskDraft()});
