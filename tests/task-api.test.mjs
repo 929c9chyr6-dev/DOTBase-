@@ -8,6 +8,48 @@ import {mutateBlobJsonArray} from '../lib/blob-json.js';
 async function accept(user,tasks){await ok(user,'tireTaskAccept',{taskId:tasks[0].id})}
 async function finishFirstThree(tasks){for(const t of tasks.slice(0,-1)){await start('worker1',t.id);await record('worker1',t);await ok('worker1','tireTaskCompleteVehicle',{taskId:t.id})}}
 
+test('acceptance notices follow explicit rights for admin, dispatch and workers, including revoked queued notices',async()=>{
+  await seed();
+  await ok('admin','adminUpdateUser',{userId:'worker2',taskNotifications:{accepted:true}});
+  await ok('admin','adminUpdateUser',{userId:'admin',taskNotifications:{accepted:false}});
+  const tasks=await create();await ok('worker1','taskData');assert.equal(read('tiretasks.json').some(t=>t.acceptedAt),false);
+  await accept('worker1',tasks);
+  const notice=read('notifications.json').find(n=>n.type==='task_accepted');assert.deepEqual(notice.recipientUserIds,['worker2']);
+  for(const id of ['admin','dispatch','worker1']){
+    const state=await ok(id,'state'),inbox=await ok(id,'notificationData');
+    assert.equal(state.toastNotifications.some(n=>n.id===notice.id),false,id);
+    assert.equal(inbox.notificationInbox.some(n=>n.id===notice.id),false,id);
+  }
+  assert.equal((await ok('worker2','state')).toastNotifications.some(n=>n.id===notice.id),true);
+  await ok('admin','adminUpdateUser',{userId:'worker2',taskNotifications:{accepted:false}});
+  const state=await ok('worker2','state'),inbox=await ok('worker2','notificationData');
+  assert.equal(state.toastNotifications.some(n=>n.id===notice.id),false);
+  assert.equal(state.notificationUnreadCount,0);assert.equal(inbox.notificationInbox.some(n=>n.id===notice.id),false);
+  assert.equal((await call('worker2','notificationSeen',{notificationId:notice.id})).status,403);
+});
+
+test('a shared push device belongs only to the current profile; repeated binding does not write again',async()=>{
+  await seed();const subscription={endpoint:'https://push.test.invalid/shared',keys:{auth:'test',p256dh:'test'}};
+  await ok('admin','pushSubscribe',{subscription});await ok('worker1','pushBindDevice',{subscription});
+  assert.equal(read('push.json').length,1);assert.equal(read('push.json')[0].userId,'worker1');
+  const version=read('sync-version.json').version;
+  await ok('worker1','pushBindDevice',{subscription});assert.equal(read('sync-version.json').version,version);
+  await Promise.all(['worker1','worker2'].map(user=>ok(user,'pushBindDevice',{subscription:{...subscription,endpoint:'https://push.test.invalid/'+user}})));
+  assert.equal(read('push.json').length,3);
+  const cfg=read('config.json');cfg.system.mode='read_only';cfg.modules={settings:{visible:false,online:false}};await put('config.json',JSON.stringify(cfg),{allowOverwrite:true});
+  await ok('worker2','pushBindDevice',{subscription});assert.equal(read('push.json').find(p=>p.subscription.endpoint===subscription.endpoint).userId,'worker2');
+});
+
+test('disabling general notifications stops TASK notices and detaches the preceding device owner, while work remains assigned',async()=>{
+  await seed();const subscription={endpoint:'https://push.test.invalid/disabled'};
+  await ok('admin','pushSubscribe',{subscription});await ok('admin','adminUpdateUser',{userId:'worker1',permissions:{notificationsReceive:false}});
+  const tasks=await create();assert.equal(tasks.length,4);assert.ok(tasks.every(t=>t.assignedToUserId==='worker1'));
+  assert.equal(read('notifications.json')?.some(n=>n.type==='task_assignment'&&n.recipientUserIds.includes('worker1'))||false,false);
+  assert.equal((await ok('worker1','pushBindDevice',{subscription})).notificationsEnabled,false);
+  assert.deepEqual(read('push.json'),[]);
+  assert.equal((await call('worker1','pushSubscribe',{subscription})).status,403);
+});
+
 test('creating a TASK uses the storage ETag despite weak download ETags and preserves existing history',async()=>{
   await seed();
   const legacy={id:'old-task',carId:'car9',status:'closed',date:'2026-01-01',instructions:'Existing archived work'};

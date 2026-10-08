@@ -54,6 +54,7 @@ function lockApp(message='',cls='msg'){
   if(lastUserId)localStorage.setItem('lastLoginUserId',lastUserId);
   tok='';me=null;D={cars:[],records:[]};openVehicleDetail=null;currentModule='home';settingsDevicesLoaded=false;notificationView='all';toastNotificationId=null;pinChangeState=null;pinResetAdminUserId=null;lastSyncVersion='';syncInFlight=false;adminStateLoadedAt=0;dataLoadedAt={};historyNextOffset=null;historyTotal=0;historyLoading=false;fleetDataKey='';if(toastTimer)clearTimeout(toastTimer);toastTimer=null;
   $('noticeOverlay').hidden=true;$('issueEditOverlay').hidden=true;$('pinAdminResetOverlay').hidden=true;$('pinChangeScreen').hidden=true;$('systemBanner').hidden=true;$('main').hidden=true;$('login').hidden=false;$('loginMsg').innerHTML='';
+  if($('notificationToast')){$('notificationToast').hidden=true;$('notificationToast').innerHTML=''}
   if(message)note($('loginMsg'),message,cls);loadLoginUsers().finally(()=>$('pin').focus());
 }
 async function loadLoginUsers(){
@@ -90,8 +91,7 @@ async function login(){
   try{
     const r=await api('login',{userId,pin:p});tok=r.token;me=r.user;localStorage.setItem('lastLoginUserId',userId);lastInteraction=Date.now();$('login').hidden=true;$('pin').value='';
     if(r.pinChangeRequired?.required){showPinChangeScreen(r.pinChangeRequired);return}
-    $('main').hidden=false;
-    await refresh();await heartbeat();await updatePushStatus();
+    await refresh();await syncExistingPushSubscription();$('main').hidden=false;await heartbeat();await updatePushStatus();
     if(!matchMedia('(display-mode: standalone)').matches&&/iPhone|iPad|iPod/.test(navigator.userAgent))$('install').hidden=false;
     const qs=requestedNavigation,tab=qs.get('tab'),mod=qs.get('module'),taskId=qs.get('task');
     if(tab==='admin')openModule('admin');
@@ -132,6 +132,7 @@ async function submitOwnPinChange(){
     if(r.user)me=r.user;
     pinChangeState=null;$('pinChangeScreen').hidden=true;$('main').hidden=false;
     await refresh();
+    await syncExistingPushSubscription();
     await heartbeat();
     await updatePushStatus();
     openModule('home');
@@ -289,6 +290,14 @@ $('save').onclick=async()=>{
 function b64ToBytes(base64){const pad='='.repeat((4-base64.length%4)%4),s=(base64+pad).replace(/-/g,'+').replace(/_/g,'/'),raw=atob(s);return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
 async function ensureSW(){if(!('serviceWorker'in navigator))return null;if(swReg)return swReg;swReg=await navigator.serviceWorker.register('/service-worker.js');await navigator.serviceWorker.ready;return swReg}
 async function currentSubscription(){try{const reg=await ensureSW();return reg?await reg.pushManager.getSubscription():null}catch{return null}}
+async function syncExistingPushSubscription(){
+  if(!tok||!me)return;
+  const sub=await currentSubscription();if(!sub)return;
+  // A browser subscription belongs to this device, and survives profile
+  // changes. Bind it to the authenticated profile before enabling TASK work.
+  try{const r=await api('pushBindDevice',{subscription:sub.toJSON()});if(r.notificationsEnabled===false)await sub.unsubscribe().catch(()=>{})}
+  catch(x){await sub.unsubscribe().catch(()=>{});console.warn('Přihlášení zařízení k oznámením se nepodařilo.',x.code)}
+}
 async function updatePushStatus(){
   const status=$('pushStatus'),btn=$('pushToggle');
   if(isReadOnly()){status.textContent='Aplikace je v režimu pouze pro čtení. Nastavení oznámení je dočasně zamknuté.';btn.textContent='Dočasně zamčeno';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}if(!can('notificationsReceive')){status.textContent='Oznámení nejsou pro tento účet povolena administrátorem.';btn.textContent='Oznámení nejsou povolena';btn.disabled=true;btn.classList.add('secondary');btn.classList.remove('danger-btn');return}

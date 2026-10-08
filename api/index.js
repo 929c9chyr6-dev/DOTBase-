@@ -402,6 +402,13 @@ function userAllowsNotification(user,channel,severity){
   if(channel==='admin')return prefs.adminInfo;
   return true;
 }
+function canViewNotification(n,user){
+  if(!n||n.retractedAt||!Array.isArray(n.recipientUserIds)||!n.recipientUserIds.includes(user.id))return false;
+  if(!String(n.type||'').startsWith('task_'))return true;
+  if(user.active===false||!hasPermission(user,'notificationsReceive'))return false;
+  const key=n.type.slice(5);
+  return !TASK_NOTICE_KEYS.includes(key)||normalizeTaskNotifications(user.taskNotifications,user.role)[key];
+}
 async function createNotification(row) {
   const normalized=normalizeNotificationRecord(row);
   const n = {
@@ -643,7 +650,7 @@ function userStats(cfg, recs, pushes, presence) {
 function buildNotificationData(cfg,currentUser,notifications,includeInbox=false){
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c]));
   const userById=Object.fromEntries(cfg.users.map((u)=>[u.id,u]));
-  const rows=(notifications||[]).map(normalizeNotificationRecord).filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n.type||''))&&Array.isArray(n.recipientUserIds)&&n.recipientUserIds.includes(currentUser.id)&&!n.retractedAt);
+  const rows=(notifications||[]).map(normalizeNotificationRecord).filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n.type||''))&&canViewNotification(n,currentUser));
   const publicNotification=(n)=>{
     const ack=(n.acks||[]).find((a)=>a.userId===currentUser.id)||null;
     const seen=(n.seen||[]).find((a)=>a.userId===currentUser.id)||null;
@@ -765,7 +772,7 @@ async function sendPushToUsers(cfg, userIds, payload) {
 }
 
 async function notifyTaskAssigned(cfg,tasks,assignee,actor){
-  if(!assignee||!tasks?.length)return {sent:0,failed:0,devices:0};
+  if(!assignee||assignee.active===false||!tasks?.length||!hasPermission(assignee,'notificationsReceive'))return {sent:0,failed:0,devices:0};
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c])),first=tasks[0],multi=tasks.length>1;
   const plates=tasks.map((t)=>carById[t.carId]?.plate||'vozidlo').slice(0,4);
   const title=first.kind==='carryover'?'Předané vozidlo k dokončení – '+(carById[first.carId]?.plate||'vozidlo'):multi?'Nový denní TASK · '+tasks.length+' vozidel':'Nový TASK – '+(carById[first.carId]?.plate||'vozidlo');
@@ -962,7 +969,7 @@ export default async function handler(req, res) {
     if (currentUser.role !== 'admin' && sys.mode === 'hibernation' && !hibernationAccessAllowed(cfg,currentUser)) {
       return json(res, 423, { error: 'HIBERNATION', message: sys.message || defaultSystemMessage('hibernation') });
     }
-    const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs']);
+    const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs','pushBindDevice']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
       return json(res, 423, { error: 'READ_ONLY', message: sys.message || defaultSystemMessage('read_only') });
     }
@@ -1116,17 +1123,23 @@ export default async function handler(req, res) {
       }catch(error){if(error instanceof TaskError)return json(res,error.status,{error:error.code,message:error.message});throw error}
     }
 
-    if (body.action === 'pushSubscribe') {
-      if (!hasPermission(currentUser, 'notificationsReceive')) return json(res, 403, { error: 'PERMISSION' });
+    if (body.action === 'pushSubscribe'||body.action==='pushBindDevice') {
+      const notificationsEnabled=hasPermission(currentUser,'notificationsReceive');
+      if(body.action==='pushSubscribe'&&!notificationsEnabled)return json(res,403,{error:'PERMISSION'});
       if (!body.subscription?.endpoint) return json(res, 400, { error: 'SUBSCRIPTION' });
-      let rows = await getPushStore();
       const endpoint = String(body.subscription.endpoint);
       const id = crypto.createHash('sha256').update(endpoint).digest('hex').slice(0, 24);
       const row = { id, userId: currentUser.id, subscription: body.subscription, createdAt: new Date().toISOString(), userAgent: cleanText(req.headers['user-agent'], 240) };
-      rows = rows.filter((p) => p.id !== id);
-      rows.push(row);
-      await writePushStore(rows);
-      return json(res, 200, { ok: true });
+      await mutateJsonArray('push.json',rows=>{
+        const matches=rows.filter(p=>p.id===id||p.subscription?.endpoint===endpoint);
+        // A profile that cannot receive notices must also detach this device
+        // from the preceding profile, even if browser unsubscribe fails.
+        if(!notificationsEnabled)return {rows:rows.filter(p=>p.id!==id&&p.subscription?.endpoint!==endpoint),changed:matches.length>0};
+        if(matches.length===1&&matches[0].userId===currentUser.id&&JSON.stringify(matches[0].subscription)===JSON.stringify(body.subscription))return {rows,changed:false};
+        const updated=[...rows.filter(p=>p.id!==id&&p.subscription?.endpoint!==endpoint),row].slice(-1000);
+        return {rows:updated,changed:true};
+      });
+      return json(res, 200, { ok: true,notificationsEnabled });
     }
 
     if (body.action === 'pushUnsubscribe') {
@@ -1156,7 +1169,7 @@ export default async function handler(req, res) {
       if (!['understood', 'view_vehicle'].includes(response)) return json(res, 400, { error: 'RESPONSE' });
       const notifications = await getNotificationLog();
       const n = notifications.find((x) => x.id === notificationId);
-      if (!n || !Array.isArray(n.recipientUserIds) || !n.recipientUserIds.includes(currentUser.id)) return json(res, 403, { error: 'NOTIFICATION' });
+      if (!canViewNotification(n,currentUser)) return json(res, 403, { error: 'NOTIFICATION' });
       let ack = (n.acks || []).find((a) => a.userId === currentUser.id);
       if (!ack) {
         ack = { userId: currentUser.id, userName: currentUser.name, response, at: new Date().toISOString() };
@@ -1188,7 +1201,7 @@ export default async function handler(req, res) {
     if (body.action === 'notificationSeen') {
       const notificationId=String(body.notificationId||'');
       const notifications=await getNotificationLog(),n=notifications.find((x)=>x.id===notificationId);
-      if(!n||!Array.isArray(n.recipientUserIds)||!n.recipientUserIds.includes(currentUser.id))return json(res,403,{error:'NOTIFICATION'});
+      if(!canViewNotification(n,currentUser))return json(res,403,{error:'NOTIFICATION'});
       n.seen=Array.isArray(n.seen)?n.seen:[];
       if(!n.seen.some((x)=>x.userId===currentUser.id))n.seen.push({userId:currentUser.id,userName:currentUser.name,at:new Date().toISOString()});
       await writeNotificationLog(notifications);
