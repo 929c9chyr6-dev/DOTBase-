@@ -35,6 +35,7 @@ async function api(action,p={}){
     const x=new Error(j.error);x.code=j.error;x.data=j;
     if(j.error==='AUTH'&&tok){const msg=j.reason==='SESSION_REVOKED'?(j.message||'Relace byla ukončena administrátorem. Zadej svůj stávající PIN.'):'Přihlášení vypršelo. Zadej PIN znovu.';setTimeout(()=>{if(tok)lockApp(msg,'msg warn')},0)}
     if(j.error==='MAINTENANCE'&&tok)setTimeout(()=>lockApp(j.message||'🔧 Probíhá technická údržba\nAplikace je dočasně pozastavena administrátorem.\nZkuste to prosím později.','msg warn'),0);
+    if(j.error==='HIBERNATION'&&tok)setTimeout(()=>lockApp(j.message||'🌙 Aplikace je v sezónním spánku\nPrávě odpočívám mezi sezónami. Ozvu se, až se zase probudím!','msg warn hibernation-message'),0);
     if(j.error==='MODULE_OFFLINE'&&tok)setTimeout(()=>showModuleBlocked(j.module,j.message),0);
     if(j.error==='PIN_CHANGE_REQUIRED'&&tok&&action!=='changeOwnPin')setTimeout(()=>showPinChangeScreen({required:true,requireOldPin:j.requireOldPin!==false}),0);
     throw x
@@ -45,7 +46,7 @@ function note(el,t,c='msg'){el.innerHTML='<div class="'+c+'">'+e(t)+'</div>'}
 function dt(x){return x?new Intl.DateTimeFormat('cs-CZ',{dateStyle:'short',timeStyle:'short'}).format(new Date(x)):'—'}
 function csvCell(v){return '"'+String(v??'').replaceAll('"','""')+'"'}
 function downloadBlob(content,type,name){const blob=new Blob([content],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',SYSTEM_MODE:'Neplatný provozní režim.',MODULE_OFFLINE:'Modul je dočasně offline.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.',TIRETASK_NOT_ACCEPTED:'TASK musí přiřazený uživatel nejdřív přijmout.',TIRETASK_NOT_ASSIGNED:'Tento TASK není přiřazený tobě.'})[x.code]||'Operace se nepodařila.'}
+function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICATE:'SPZ už existuje.',PIN_USED:'PIN už používá někdo jiný.',PIN:'PIN musí mít 4 číslice.',PIN_OLD:'Stávající PIN není správný.',PIN_MATCH:'Nové PINy se neshodují.',PIN_SAME:'Nový PIN musí být jiný než stávající PIN.',PIN_CHANGE_REQUIRED:'Je nutné změnit PIN.',PIN_SELF_SERVICE:'PIN uživatele mění pouze uživatel přes výzvu ke změně.',PIN_RESET_NOT_AVAILABLE:'Reset bez starého PINu není pro tento účet povolen.',PIN_RESET_ONLY:'Tento přístup slouží pouze ke změně PINu.',DOT:'Neplatný DOT.',MILEAGE:'Neplatný stav kilometrů.',CAR:'Auto nebylo nalezeno.',USER:'Uživatel nebyl nalezen.',MESSAGE:'Doplň nadpis i text oznámení.',VEHICLE_CATEGORY:'Vyber platnou kategorii vozidla.',VEHICLE_CATEGORY_DUPLICATE:'Tato kategorie už existuje.',VEHICLE_CATEGORY_IN_USE:'Kategorii používají vozidla nebo aktivní TASKy. Nejdřív je přesuň do jiné kategorie.',READ_ONLY:'Aplikace je momentálně pouze pro čtení.',MAINTENANCE:'Probíhá technická údržba.',HIBERNATION:'Aplikace je v sezónním spánku.',SYSTEM_MODE:'Neplatný provozní režim.',MODULE_OFFLINE:'Modul je dočasně offline.',TIRETASK:'Úkol TASK nebyl nalezen.',TIRETASK_DATE:'Zadej platné datum.',TIRETASK_TIME:'Zadej platný čas.',TIRETASK_STATUS:'Neplatný stav úkolu.',TIRETASK_CLOSED:'Uzavřený úkol už nelze měnit.',TIRETASK_NOT_COMPLETED:'Úkol lze uzavřít až po dokončení PNEU/DOT zápisu.',TIRETASK_COMPLETED:'Hotový úkol už lze pouze okomentovat nebo uzavřít.',TIRETASK_NOT_ACCEPTED:'TASK musí přiřazený uživatel nejdřív přijmout.',TIRETASK_NOT_ASSIGNED:'Tento TASK není přiřazený tobě.'})[x.code]||'Operace se nepodařila.'}
 
 function lockApp(message='',cls='msg'){
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
@@ -101,8 +102,8 @@ async function login(){
     const msg=x.code==='ACCOUNT_LOCKED'?(x.data?.message||'Účet je zablokovaný. Kontaktuj administrátora.'):
       x.code==='LOCKED'?'Přihlášení Admina je na 10 minut pozastavené.':
       x.code==='BAD_PIN'?'Špatný PIN.'+(Number.isFinite(remaining)?' Zbývá '+remaining+' '+(remaining===1?'pokus.':'pokusy.'):''):
-      x.code==='MAINTENANCE'?errorText(x):errorText(x);
-    note($('loginMsg'),msg,(x.code==='MAINTENANCE'||x.code==='ACCOUNT_LOCKED')?'msg warn':'msg err');
+      (x.code==='MAINTENANCE'||x.code==='HIBERNATION')?(x.data?.message||errorText(x)):errorText(x);
+    note($('loginMsg'),msg,(x.code==='MAINTENANCE'||x.code==='HIBERNATION'||x.code==='ACCOUNT_LOCKED')?'msg warn'+(x.code==='HIBERNATION'?' hibernation-message':''):'msg err');
   }
 }
 function showPinChangeScreen(reset){
@@ -1197,10 +1198,13 @@ function renderModuleShell(){
 function renderSystemBanner(){
   const b=$('systemBanner'),s=D.system||{mode:'normal',message:''};
   if(!b||s.mode==='normal'){if(b)b.hidden=true;return}
-  b.hidden=false;b.classList.toggle('read-only',s.mode==='read_only');b.classList.toggle('maintenance',s.mode==='maintenance');
+  b.hidden=false;b.classList.toggle('read-only',s.mode==='read_only');b.classList.toggle('maintenance',s.mode==='maintenance');b.classList.toggle('hibernation',s.mode==='hibernation');
   if(s.mode==='read_only'){
     $('systemBannerTitle').textContent='🟠 READ ONLY — pouze prohlížení';
     $('systemBannerText').textContent=(s.message||'Probíhá systémová údržba. Data lze prohlížet, ale zápisy jsou dočasně pozastavené.')+(me?.role==='admin'?' Admin má stále plný přístup.':'');
+  }else if(s.mode==='hibernation'){
+    $('systemBannerTitle').textContent='🌙 HIBERNACE — sezónní spánek';
+    $('systemBannerText').textContent=(s.message||'Aplikace je v sezónním spánku.')+(me?.role==='admin'?' Admin zůstává vždy online a má plný přístup.':' Máš udělenou výjimku pro práci během hibernace.');
   }else{
     $('systemBannerTitle').textContent='🔴 MAINTENANCE — technická údržba';
     $('systemBannerText').textContent=(s.message||'Aplikace je momentálně dočasně pozastavena administrátorem.')+(me?.role==='admin'?' Ostatní uživatelé se nemohou přihlásit.':'');
@@ -1208,23 +1212,33 @@ function renderSystemBanner(){
 }
 const SYSTEM_MESSAGE_TEMPLATES={
   read_only:'Probíhá systémová údržba.\nData lze prohlížet, ale zápisy jsou dočasně pozastavené.',
-  maintenance:'🔧 Probíhá technická údržba\nAplikace je momentálně dočasně pozastavena administrátorem.\nZkuste to prosím později.'
+  maintenance:'🔧 Probíhá technická údržba\nAplikace je momentálně dočasně pozastavena administrátorem.\nZkuste to prosím později.',
+  hibernation:'🌙 Aplikace je v sezónním spánku\nPrávě odpočívám mezi sezónami. Ozvu se, až se zase probudím!'
 };
 const NORMAL_RETURN_TEMPLATE='Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
+const HIBERNATION_RETURN_TEMPLATE='🌅 Aplikace je zase vzhůru. Sezónní spánek skončil a Autoprovoz je opět připravený k práci.';
 function systemModeHelp(mode){
   if(mode==='read_only')return '<b>🟠 READ ONLY</b>Ostatní uživatelé mohou data prohlížet, ale server odmítne zápisy, úpravy a mazání.';
   if(mode==='maintenance')return '<b>🔴 MAINTENANCE</b>Do aplikace se dostane pouze Admin. Již přihlášení uživatelé budou při dalším spojení odhlášeni.';
+  if(mode==='hibernation')return '<b>🌙 HIBERNACE</b>Aplikace je mimo sezónu uzamčená. Admin zůstává vždy online; níže lze povolit konkrétní uživatele, kteří budou mít normální přístup podle svých práv.';
   return '<b>🟢 NORMAL</b>Všichni uživatelé pracují podle svých rolí a oprávnění.';
+}
+function renderHibernationAccessControls(){
+  const list=$('hibernationUserList');if(!list)return;
+  const allowed=new Set(D.system?.hibernationAllowedUserIds||[]),users=(D.users||[]).filter(u=>u.active&&u.role!=='admin');
+  list.innerHTML=users.length?users.map(u=>'<label class="hibernation-user-choice"><input class="hibernation-user-toggle" type="checkbox" value="'+e(u.id)+'" '+(allowed.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><span class="small">'+e(roleLabel(u.role))+'</span></span><span class="hibernation-state">'+(allowed.has(u.id)?'🟢 ONLINE':'⚫ OFFLINE')+'</span></label>').join(''):'<div class="small">Nejsou k dispozici žádní aktivní uživatelé.</div>';
+  list.querySelectorAll('.hibernation-user-toggle').forEach(x=>x.onchange=()=>{const state=x.closest('.hibernation-user-choice')?.querySelector('.hibernation-state');if(state)state.textContent=x.checked?'🟢 ONLINE':'⚫ OFFLINE'});
 }
 function updateSystemModeEditor(resetNotify=false){
   if(!$('systemMode'))return;
   const selected=$('systemMode').value,current=D.system?.mode||'normal',toNormal=selected==='normal'&&current!=='normal';
   $('systemModeHelp').innerHTML=systemModeHelp(selected);
   $('systemRestrictionMessage').hidden=selected==='normal';
+  if($('hibernationAccessBox'))$('hibernationAccessBox').hidden=selected!=='hibernation';
   $('normalNotifyBox').hidden=!toNormal;
   if(toNormal&&resetNotify){
     $('normalNotify').checked=true;
-    $('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE;
+    $('normalNotifyMessage').value=current==='hibernation'?HIBERNATION_RETURN_TEMPLATE:NORMAL_RETURN_TEMPLATE;
   }
 }
 function renderSystemControls(){
@@ -1233,7 +1247,8 @@ function renderSystemControls(){
   $('systemMode').value=s.mode||'normal';
   $('systemMessage').value=s.customMessage??'';
   $('normalNotify').checked=false;
-  $('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE;
+  $('normalNotifyMessage').value=s.mode==='hibernation'?HIBERNATION_RETURN_TEMPLATE:NORMAL_RETURN_TEMPLATE;
+  renderHibernationAccessControls();
   updateSystemModeEditor(false);
   $('systemModeMeta').textContent=s.updatedAt?'Poslední změna: '+dt(s.updatedAt)+(s.updatedBy?' · '+s.updatedBy:''):'Režim zatím nebyl ručně měněn.';
 }
@@ -1565,7 +1580,7 @@ if($('useSystemTemplate'))$('useSystemTemplate').onclick=()=>{
   const mode=$('systemMode').value;
   if(SYSTEM_MESSAGE_TEMPLATES[mode])$('systemMessage').value=SYSTEM_MESSAGE_TEMPLATES[mode];
 };
-if($('useNormalTemplate'))$('useNormalTemplate').onclick=()=>{$('normalNotifyMessage').value=NORMAL_RETURN_TEMPLATE};
+if($('useNormalTemplate'))$('useNormalTemplate').onclick=()=>{$('normalNotifyMessage').value=(D.system?.mode==='hibernation'?HIBERNATION_RETURN_TEMPLATE:NORMAL_RETURN_TEMPLATE)};
 if($('forceLogoutAll'))$('forceLogoutAll').onclick=async()=>{
   if(!confirm('Vynutit odhlášení VŠECH uživatelů?\n\nOdhlásí se i tento Admin účet. PINy se nezmění a naposledy vybraný profil zůstane zapamatovaný. Každý pouze znovu zadá svůj stávající PIN.'))return;
   $('forceLogoutAll').disabled=true;
@@ -1579,12 +1594,14 @@ if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
   const returningToNormal=mode==='normal'&&(D.system?.mode||'normal')!=='normal';
   const notifyOnNormal=returningToNormal&&$('normalNotify').checked;
   const normalNotifyMessage=$('normalNotifyMessage').value.trim();
-  const label=mode==='normal'?'NORMAL':mode==='read_only'?'READ ONLY':'MAINTENANCE';
+  const hibernationAllowedUserIds=mode==='hibernation'?[...document.querySelectorAll('.hibernation-user-toggle:checked')].map(x=>x.value):(D.system?.hibernationAllowedUserIds||[]);
+  const label=mode==='normal'?'NORMAL':mode==='read_only'?'READ ONLY':mode==='hibernation'?'HIBERNACE':'MAINTENANCE';
   if(notifyOnNormal&&!normalNotifyMessage)return note($('systemModeMsg'),'Doplň text oznámení pro návrat do NORMAL.','msg err');
-  if(!confirm('Nastavit provozní režim '+label+'?'+(notifyOnNormal?'\nUživatelům se zároveň odešle oznámení.':'')))return;
+  const extra=mode==='hibernation'?'\nVýjimky ONLINE: '+hibernationAllowedUserIds.length+' uživatelů.':'';
+  if(!confirm('Nastavit provozní režim '+label+'?'+extra+(notifyOnNormal?'\nUživatelům se zároveň odešle oznámení.':'')))return;
   $('saveSystemMode').disabled=true;
   try{
-    const r=await api('adminSetSystemMode',{mode,message,notifyOnNormal,normalNotifyMessage});
+    const r=await api('adminSetSystemMode',{mode,message,hibernationAllowedUserIds,notifyOnNormal,normalNotifyMessage});
     let ok='Provozní režim byl uložen.';
     if(r.notification)ok+=' Oznámení: '+r.notification.sent+'/'+r.notification.devices+' zařízení.';
     note($('systemModeMsg'),ok,'msg ok');await refresh()

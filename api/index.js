@@ -31,19 +31,26 @@ function normalizeTaskNotifications(raw,role='driver'){
   const input=raw&&typeof raw==='object'?raw:{};
   return { accepted: typeof input.accepted==='boolean'?input.accepted:(role==='admin'||role==='dispatch') };
 }
-const SYSTEM_MODES = ['normal', 'read_only', 'maintenance'];
-const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', updatedAt: null, updatedBy: null };
+const SYSTEM_MODES = ['normal', 'read_only', 'maintenance', 'hibernation'];
+const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', hibernationAllowedUserIds: [], updatedAt: null, updatedBy: null };
 function systemState(cfg) {
   const s = { ...DEFAULT_SYSTEM_STATE, ...(cfg.system || {}) };
   if (!SYSTEM_MODES.includes(s.mode)) s.mode = 'normal';
+  s.hibernationAllowedUserIds=[...new Set((Array.isArray(s.hibernationAllowedUserIds)?s.hibernationAllowedUserIds:[]).map(String).filter(Boolean))].slice(0,200);
   return s;
 }
+function hibernationAccessAllowed(cfg,user){
+  if(user?.role==='admin')return true;
+  const s=systemState(cfg);return s.mode!=='hibernation'||s.hibernationAllowedUserIds.includes(user?.id);
+}
 function defaultSystemMessage(mode) {
+  if (mode === 'hibernation') return '🌙 Aplikace je v sezónním spánku\nPrávě odpočívám mezi sezónami. Ozvu se, až se zase probudím!';
   if (mode === 'maintenance') return '🔧 Probíhá technická údržba\nAplikace je momentálně dočasně pozastavena administrátorem.\nZkuste to prosím později.';
   if (mode === 'read_only') return 'Probíhá systémová údržba.\nData lze prohlížet, ale zápisy jsou dočasně pozastavené.';
   return '';
 }
 const DEFAULT_NORMAL_RETURN_MESSAGE = 'Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.';
+const DEFAULT_HIBERNATION_RETURN_MESSAGE = '🌅 Aplikace je zase vzhůru. Sezónní spánek skončil a Autoprovoz je opět připravený k práci.';
 const MODULE_KEYS = ['vehicleOverview','pneu','tiretask','notifications','settings'];
 const MODULE_LABELS = {
   vehicleOverview:'PŘEHLED VOZIDEL', pneu:'PNEU / DOT', tiretask:'TASK', notifications:'OZNÁMENÍ', settings:'NASTAVENÍ'
@@ -231,7 +238,7 @@ async function touchSyncVersion(){
 function normalizeConfig(cfg) {
   cfg ||= {};
   const previousVersion = Number(cfg.version) || 0;
-  cfg.version = 24;
+  cfg.version = 25;
   cfg.users ||= [];
   cfg.cars ||= [];
   cfg.vehicleCategories = normalizeVehicleCategories(cfg.vehicleCategories, cfg.cars);
@@ -270,6 +277,8 @@ function normalizeConfig(cfg) {
       delete u.permissions;
     }
   }
+  const validHibernationIds=new Set(cfg.users.filter((u)=>u.active!==false&&!u.deletedAt&&u.role!=='admin').map((u)=>u.id));
+  cfg.system.hibernationAllowedUserIds=(cfg.system.hibernationAllowedUserIds||[]).filter((id)=>validHibernationIds.has(id));
   for (const c of cfg.cars) {
     if (c.active === undefined) c.active = true;
     if (!c.createdAt) c.createdAt = null;
@@ -700,7 +709,7 @@ async function publicState(cfg,recs,currentUser){
     attentionIssueCount:issues.length,
     tireTaskCapabilities:tireTaskCapabilities(currentUser),
     ...notice,
-    system:(()=>{const s=systemState(cfg);return {mode:s.mode,message:s.message||defaultSystemMessage(s.mode),customMessage:currentUser.role==='admin'?(s.message||''):undefined,updatedAt:s.updatedAt||null,updatedBy:currentUser.role==='admin'?(s.updatedBy||null):null}})(),
+    system:(()=>{const s=systemState(cfg);return {mode:s.mode,message:s.message||defaultSystemMessage(s.mode),customMessage:currentUser.role==='admin'?(s.message||''):undefined,hibernationAccess:hibernationAccessAllowed(cfg,currentUser),hibernationAllowedUserIds:currentUser.role==='admin'?s.hibernationAllowedUserIds:undefined,updatedAt:s.updatedAt||null,updatedBy:currentUser.role==='admin'?(s.updatedBy||null):null}})(),
     modules:publicModules(cfg,currentUser),
     push:{publicKey:hasPermission(currentUser,'notificationsReceive')?VAPID_PUBLIC_KEY:''},
   };
@@ -914,6 +923,10 @@ export default async function handler(req, res) {
         await writeConfig(cfg);
         return json(res,423,{error:'MAINTENANCE',message:sys.message||defaultSystemMessage('maintenance')});
       }
+      if(u.role!=='admin'&&sys.mode==='hibernation'&&!hibernationAccessAllowed(cfg,u)){
+        await writeConfig(cfg);
+        return json(res,423,{error:'HIBERNATION',message:sys.message||defaultSystemMessage('hibernation')});
+      }
       u.lastLoginAt=new Date().toISOString();
       await writeConfig(cfg);
       const token=sign({uid:u.id,role:u.role,sg:cfg.sessionGeneration,exp:Date.now()+12*60*60*1000});
@@ -960,6 +973,9 @@ export default async function handler(req, res) {
     const sys = systemState(cfg);
     if (currentUser.role !== 'admin' && sys.mode === 'maintenance') {
       return json(res, 423, { error: 'MAINTENANCE', message: sys.message || defaultSystemMessage('maintenance') });
+    }
+    if (currentUser.role !== 'admin' && sys.mode === 'hibernation' && !hibernationAccessAllowed(cfg,currentUser)) {
+      return json(res, 423, { error: 'HIBERNATION', message: sys.message || defaultSystemMessage('hibernation') });
     }
     const readOnlyAllowed = new Set(['state','sync','adminState','vehicleOverviewData','pneuData','fleetData','taskData','notificationData','historyPage','historyExportData','globalSearch','heartbeat','myPushDevices','vehicleDetail','notificationRespond','notificationSeen','saveNotificationPrefs']);
     if (currentUser.role !== 'admin' && sys.mode === 'read_only' && !readOnlyAllowed.has(body.action)) {
@@ -1580,12 +1596,17 @@ export default async function handler(req, res) {
       if (!SYSTEM_MODES.includes(mode)) return json(res, 400, { error: 'SYSTEM_MODE' });
       const before = systemState(cfg);
       const message = cleanText(body.message, 300);
+      const validHibernationIds=new Set(cfg.users.filter((u)=>u.active!==false&&!u.deletedAt&&u.role!=='admin').map((u)=>u.id));
+      const requestedHibernationIds=Array.isArray(body.hibernationAllowedUserIds)?body.hibernationAllowedUserIds:before.hibernationAllowedUserIds;
+      const hibernationAllowedUserIds=[...new Set(requestedHibernationIds.map(String).filter((id)=>validHibernationIds.has(id)))].slice(0,200);
       const returningToNormal = mode === 'normal' && before.mode !== 'normal';
+      const wakingFromHibernation = returningToNormal && before.mode === 'hibernation';
       const notifyOnNormal = returningToNormal && !!body.notifyOnNormal;
-      const normalNotifyMessage = cleanText(body.normalNotifyMessage, 240) || DEFAULT_NORMAL_RETURN_MESSAGE;
+      const normalNotifyMessage = cleanText(body.normalNotifyMessage, 240) || (wakingFromHibernation?DEFAULT_HIBERNATION_RETURN_MESSAGE:DEFAULT_NORMAL_RETURN_MESSAGE);
       cfg.system = {
         mode,
         message,
+        hibernationAllowedUserIds,
         updatedAt: new Date().toISOString(),
         updatedBy: currentUser.name,
       };
@@ -1593,28 +1614,32 @@ export default async function handler(req, res) {
 
       let notification = null;
       if (notifyOnNormal) {
-        const users = cfg.users.filter((u) => u.active && u.role !== 'admin' && hasPermission(u, 'notificationsReceive'));
+        const users = cfg.users.filter((u) => u.active!==false&&!u.deletedAt&&u.role !== 'admin');
+        const pushUsers=users.filter((u)=>hasPermission(u,'notificationsReceive'));
         if (users.length) {
+          const title=wakingFromHibernation?'🌅 Autoprovoz je opět aktivní':'Jsme zpátky';
           const n = await createNotification({
-            type: 'system_normal',
-            title: 'Jsme zpátky',
+            type: wakingFromHibernation?'system_wakeup':'system_normal',
+            channel:'admin',severity:'important',requiresAck:false,
+            title,
             body: normalNotifyMessage,
             recipient: 'workers',
             recipientUserIds: users.map((u) => u.id),
             byUserId: currentUser.id,
             byUserName: currentUser.name,
+            byUserRole:'admin',
           });
-          const result = await sendPushToUsers(cfg, users.map((u) => u.id), {
+          const result = await sendPushToUsers(cfg, pushUsers.map((u) => u.id), {
             title: n.title,
             body: n.body,
             tag: 'notification-' + n.id,
-            url: '/?notification=' + encodeURIComponent(n.id),
+            url: '/?module=notifications&notification=' + encodeURIComponent(n.id),
           });
           await patchNotification(n.id, result);
-          notification = { notificationId: n.id, ...result };
-          await appendAudit(currentUser, 'system_normal_notification', 'Odesláno oznámení o návratu do NORMAL (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, message: normalNotifyMessage, ...result });
+          notification = { notificationId: n.id, recipients: users.length, ...result };
+          await appendAudit(currentUser, wakingFromHibernation?'system_wakeup_notification':'system_normal_notification', (wakingFromHibernation?'Odesláno oznámení o probuzení aplikace':'Odesláno oznámení o návratu do NORMAL')+' (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, recipients:users.length,message: normalNotifyMessage, ...result });
         } else {
-          notification = { sent: 0, failed: 0, devices: 0 };
+          notification = { sent: 0, failed: 0, devices: 0, recipients:0 };
         }
       }
 
