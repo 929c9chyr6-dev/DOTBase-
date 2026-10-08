@@ -1236,9 +1236,12 @@ function updateSystemModeEditor(resetNotify=false){
   $('systemRestrictionMessage').hidden=selected==='normal';
   if($('hibernationAccessBox'))$('hibernationAccessBox').hidden=selected!=='hibernation';
   $('normalNotifyBox').hidden=!toNormal;
+  const waking=current==='hibernation'&&toNormal;
+  if($('normalNotifyLabel'))$('normalNotifyLabel').textContent=waking?'🚨 Odeslat kritické systémové oznámení o probuzení aplikace':'🔔 Po návratu do NORMAL odeslat oznámení uživatelům';
+  if($('normalNotifyHint'))$('normalNotifyHint').textContent=waking?'Kritické systémové oznámení obejde uživatelské preference a každý příjemce ho musí potvrdit tlačítkem „Rozumím“.':'Oznámení se odešle pouze při skutečném návratu do NORMAL z omezeného režimu.';
   if(toNormal&&resetNotify){
     $('normalNotify').checked=true;
-    $('normalNotifyMessage').value=current==='hibernation'?HIBERNATION_RETURN_TEMPLATE:NORMAL_RETURN_TEMPLATE;
+    $('normalNotifyMessage').value=waking?HIBERNATION_RETURN_TEMPLATE:NORMAL_RETURN_TEMPLATE;
   }
 }
 function renderSystemControls(){
@@ -1596,9 +1599,11 @@ if($('saveSystemMode'))$('saveSystemMode').onclick=async()=>{
   const normalNotifyMessage=$('normalNotifyMessage').value.trim();
   const hibernationAllowedUserIds=mode==='hibernation'?[...document.querySelectorAll('.hibernation-user-toggle:checked')].map(x=>x.value):(D.system?.hibernationAllowedUserIds||[]);
   const label=mode==='normal'?'NORMAL':mode==='read_only'?'READ ONLY':mode==='hibernation'?'HIBERNACE':'MAINTENANCE';
+  const wakingFromHibernation=returningToNormal&&(D.system?.mode||'normal')==='hibernation';
   if(notifyOnNormal&&!normalNotifyMessage)return note($('systemModeMsg'),'Doplň text oznámení pro návrat do NORMAL.','msg err');
   const extra=mode==='hibernation'?'\nVýjimky ONLINE: '+hibernationAllowedUserIds.length+' uživatelů.':'';
-  if(!confirm('Nastavit provozní režim '+label+'?'+extra+(notifyOnNormal?'\nUživatelům se zároveň odešle oznámení.':'')))return;
+  const notifyConfirm=notifyOnNormal?(wakingFromHibernation?'\nOdešle se KRITICKÉ systémové oznámení s povinným potvrzením „Rozumím“.':'\nUživatelům se zároveň odešle oznámení.'):'';
+  if(!confirm('Nastavit provozní režim '+label+'?'+extra+notifyConfirm))return;
   $('saveSystemMode').disabled=true;
   try{
     const r=await api('adminSetSystemMode',{mode,message,hibernationAllowedUserIds,notifyOnNormal,normalNotifyMessage});

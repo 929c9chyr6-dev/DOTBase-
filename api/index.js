@@ -1617,10 +1617,10 @@ export default async function handler(req, res) {
         const users = cfg.users.filter((u) => u.active!==false&&!u.deletedAt&&u.role !== 'admin');
         const pushUsers=users.filter((u)=>hasPermission(u,'notificationsReceive'));
         if (users.length) {
-          const title=wakingFromHibernation?'🌅 Autoprovoz je opět aktivní':'Jsme zpátky';
+          const title=wakingFromHibernation?'🚨 Autoprovoz je opět aktivní':'Jsme zpátky';
           const n = await createNotification({
             type: wakingFromHibernation?'system_wakeup':'system_normal',
-            channel:'admin',severity:'important',requiresAck:false,
+            channel:'admin',severity:wakingFromHibernation?'critical':'important',requiresAck:wakingFromHibernation,
             title,
             body: normalNotifyMessage,
             recipient: 'workers',
@@ -1637,7 +1637,7 @@ export default async function handler(req, res) {
           });
           await patchNotification(n.id, result);
           notification = { notificationId: n.id, recipients: users.length, ...result };
-          await appendAudit(currentUser, wakingFromHibernation?'system_wakeup_notification':'system_normal_notification', (wakingFromHibernation?'Odesláno oznámení o probuzení aplikace':'Odesláno oznámení o návratu do NORMAL')+' (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, recipients:users.length,message: normalNotifyMessage, ...result });
+          await appendAudit(currentUser, wakingFromHibernation?'system_wakeup_notification':'system_normal_notification', (wakingFromHibernation?'Odesláno KRITICKÉ systémové oznámení o probuzení aplikace':'Odesláno oznámení o návratu do NORMAL')+' (' + result.sent + '/' + (result.devices || 0) + ')', { notificationId: n.id, recipients:users.length,severity:n.severity,requiresAck:n.requiresAck,message: normalNotifyMessage, ...result });
         } else {
           notification = { sent: 0, failed: 0, devices: 0, recipients:0 };
         }

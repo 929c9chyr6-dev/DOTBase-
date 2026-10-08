@@ -319,10 +319,10 @@ html[data-theme="dark"] .home-my-tasks,html[data-theme="dark"] .my-task-card{bac
 </div>
 
 <div id="normalNotifyBox" class="mode-help" hidden>
-<div class="switchline"><input id="normalNotify" type="checkbox"><label for="normalNotify"><b>🔔 Po návratu do NORMAL odeslat oznámení uživatelům</b></label></div>
+<div class="switchline"><input id="normalNotify" type="checkbox"><label for="normalNotify"><b id="normalNotifyLabel">🔔 Po návratu do NORMAL odeslat oznámení uživatelům</b></label></div>
 <div class="toolbar" style="margin-bottom:7px"><button id="useNormalTemplate" class="secondary">📄 Použít šablonu oznámení</button></div>
 <textarea id="normalNotifyMessage" maxlength="240">Jsme zpátky. Aplikace zpět v normálním provozu. Děkuji za trpělivost.</textarea>
-<div class="small" style="margin-top:5px">Oznámení se odešle pouze při skutečném návratu do NORMAL z omezeného režimu, včetně probuzení z HIBERNACE. Text můžeš před odesláním upravit.</div>
+<div id="normalNotifyHint" class="small" style="margin-top:5px">Oznámení se odešle pouze při skutečném návratu do NORMAL z omezeného režimu. Text můžeš před odesláním upravit.</div>
 </div>
 
 <button id="saveSystemMode" class="primary" style="width:100%;margin-top:8px">Uložit provozní režim</button>
