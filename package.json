@@ -1,1 +1,1 @@
-{"type":"module","dependencies":{"@vercel/blob":"latest","web-push":"latest"}}
+{"type":"module","scripts":{"test":"node --loader ./tests/blob-loader.mjs --test tests/task-api.test.mjs"},"dependencies":{"@vercel/blob":"2.8.1","web-push":"3.6.7"}}

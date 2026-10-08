@@ -1,6 +1,7 @@
-import { put, get, list, del } from '@vercel/blob';
+import { put, get, list, del, BlobPreconditionFailedError, BlobNotFoundError } from '@vercel/blob';
 import crypto from 'node:crypto';
 import webpush from 'web-push';
+import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
 
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
@@ -29,7 +30,7 @@ function normalizeUserNotificationPrefs(raw) {
 }
 function normalizeTaskNotifications(raw,role='driver'){
   const input=raw&&typeof raw==='object'?raw:{};
-  return { accepted: typeof input.accepted==='boolean'?input.accepted:(role==='admin'||role==='dispatch') };
+  return Object.fromEntries(TASK_NOTICE_KEYS.map(key=>[key,typeof input[key]==='boolean'?input[key]:(role==='admin'||role==='dispatch')]));
 }
 const SYSTEM_MODES = ['normal', 'read_only', 'maintenance', 'hibernation'];
 const DEFAULT_SYSTEM_STATE = { mode: 'normal', message: '', hibernationAllowedUserIds: [], updatedAt: null, updatedBy: null };
@@ -98,7 +99,7 @@ function publicModules(cfg,currentUser){
 }
 function actionModule(action){
   if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (['taskData','tireTaskCreate','tireTaskCreateBatch','tireTaskUpdate','tireTaskAccept','tireTaskComment','tireTaskSetStatus','tireTaskClose','tireTaskDelete'].includes(action)) return 'tiretask';
+  if (action==='taskData'||TASK_ACTIONS.has(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['notificationData','sendOperationalNotification'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
@@ -367,7 +368,16 @@ function presenceFor(userId, presence, now = Date.now()) {
   return { status, lastOnlineAt: p.lastHeartbeatAt || null, lastActivityAt: p.lastActivityAt || null };
 }
 async function getNotificationLog() { return await readJson('notifications.json', []); }
-async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); await touchSyncVersion(); }
+async function writeNotificationLog(rows) {
+  // Seen/acknowledged updates merge into fresh state, retaining notices that
+  // arrived while a user was confirming a previous notification.
+  const incoming=new Map(rows.map(n=>[n.id,n]));
+  await mutateJsonArray('notifications.json',current=>{
+    let changed=false;
+    for(const n of current){const update=incoming.get(n.id);if(!update)continue;for(const key of ['seen','acks']){const merged=[...(n[key]||[])];for(const item of update[key]||[])if(!merged.some(x=>x.userId===item.userId)){merged.push(item);changed=true}n[key]=merged}}
+    return {rows:current,changed};
+  });
+}
 function normalizeNotificationRecord(n) {
   const type=String(n?.type||'');
   const legacyPassive=!n?.channel&&typeof n?.requiresAck!=='boolean'&&type!=='manual';
@@ -392,7 +402,6 @@ function userAllowsNotification(user,channel,severity){
   return true;
 }
 async function createNotification(row) {
-  const rows = await getNotificationLog();
   const normalized=normalizeNotificationRecord(row);
   const n = {
     ...normalized,
@@ -400,29 +409,15 @@ async function createNotification(row) {
     recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))],
     acks: [], seen: [],
   };
-  rows.unshift(n);
-  await writeNotificationLog(rows);
+  await mutateJsonArray('notifications.json',rows=>({rows:[n,...rows].slice(0,500),changed:true}));
   return n;
 }
 async function patchNotification(id, patch) {
-  const rows = await getNotificationLog();
-  const n = rows.find((x) => x.id === id);
-  if (!n) return null;
-  Object.assign(n, patch);
-  await writeNotificationLog(rows);
-  return n;
+  const out=await mutateJsonArray('notifications.json',rows=>{const n=rows.find(x=>x.id===id);if(n)Object.assign(n,patch);return {rows,changed:!!n,notification:n||null}});
+  return out.notification;
 }
-const TIRETASK_STATUSES = ['planned','in_progress','completed','problem','closed'];
 function pragueDate(value = Date.now()) {
   return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Prague',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
-}
-function normalizeTaskDate(v) {
-  const s=String(v||'').trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(s)?s:'';
-}
-function normalizeTaskTime(v) {
-  const s=String(v||'').trim();
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(s)?s:'';
 }
 function normalizeTireTaskCategory(cfg,v){
   const legacy=String(v||'').trim().toLowerCase();
@@ -448,9 +443,29 @@ async function getTireTasks() {
   return Array.isArray(rows)?rows:[];
 }
 async function writeTireTasks(rows) {
-  await writeJson('tiretasks.json',(Array.isArray(rows)?rows:[]).slice(0,3000));
+  await writeJson('tiretasks.json',Array.isArray(rows)?rows:[]);
   await touchSyncVersion();
 }
+async function mutateJsonArray(path,mutate) {
+  // Conditional writes protect simultaneous work on different cars. Retrying
+  // re-applies the transition to fresh state, including its idempotency checks.
+  for(let attempt=0;attempt<6;attempt++){
+    let snapshot=null;
+    try{snapshot=await get(path,{access:'private',useCache:false})}catch(error){if(!(error instanceof BlobNotFoundError))throw error}
+    const rows=snapshot?.statusCode===200?JSON.parse(await new Response(snapshot.stream).text()):[];
+    const out=await mutate(Array.isArray(rows)?rows:[]);
+    if(!out.changed)return out;
+    try{
+      await put(path,JSON.stringify(out.rows),{access:'private',addRandomSuffix:false,allowOverwrite:!!snapshot,contentType:'application/json',...(snapshot?{ifMatch:snapshot.blob.etag}:{})});
+    }catch(error){
+      if(error instanceof BlobPreconditionFailedError||(!snapshot&&error.name==='BlobPathnameMismatchError'))continue;
+      throw error;
+    }
+    await touchSyncVersion();return out;
+  }
+  throw new TaskError('TIRETASK_CONFLICT','TASK mezitím změnil jiný uživatel. Obnov přehled a zopakuj akci.');
+}
+async function mutateTireTasks(mutate){return mutateJsonArray('tiretasks.json',mutate)}
 function publicTireTasks(cfg,rows,recs=[]) {
   const carById=Object.fromEntries(cfg.cars.map((car)=>[car.id,car]));
   const userById=Object.fromEntries(cfg.users.map((u)=>[u.id,u]));
@@ -473,6 +488,7 @@ function publicTireTasks(cfg,rows,recs=[]) {
       latestSummerDot:summer?recordDotSummary(summer):'',
       latestWinterDot:winter?recordDotSummary(winter):'',
       comments:Array.isArray(t.comments)?t.comments.slice(-100):[],
+      recordReady:taskRecordReady(t,recs,validateRecordFields),
     };
   }).sort((a,b)=>{
     const aa=String(a.date||'')+'T'+String(a.time||'23:59'), bb=String(b.date||'')+'T'+String(b.time||'23:59');
@@ -482,34 +498,8 @@ function publicTireTasks(cfg,rows,recs=[]) {
   });
 }
 async function completeMatchingTireTask(cfg, record, user, preferredTaskId = null) {
-  const rows=await getTireTasks();
-  const open=(t)=>t.carId===record.carId&&t.targetSeason===record.season&&['planned','in_progress','problem'].includes(t.status)&&(!t.assignedToUserId||(t.acceptedAt&&t.acceptedById===t.assignedToUserId));
-  let t=preferredTaskId ? rows.find((x)=>x.id===String(preferredTaskId)&&open(x)) : null;
-  if(!t){
-    const day=pragueDate(record.ts);
-    const matches=rows.filter((x)=>open(x)&&x.date===day);
-    matches.sort((a,b)=>String(a.time||'23:59').localeCompare(String(b.time||'23:59')));
-    t=matches[0]||null;
-  }
-  if(!t)return null;
-  const now=new Date(record.ts).toISOString();
-  t.status='completed';
-  t.problemNote='';t.problemAt=null;
-  t.completedRecordId=record.id;
-  t.completedRecordPath=recordPath(record);
-  t.completedDot=recordDotSummary(record);
-  t.completedMileage=record.mileage;
-  t.completedAt=now;
-  t.completedBy=user?.name||'Neznámý';
-  t.completedById=user?.id||null;
-  t.updatedAt=now;
-  t.updatedBy=user?.name||'Neznámý';
-  t.updatedById=user?.id||null;
-  t.activity=Array.isArray(t.activity)?t.activity:[];
-  t.activity.push({id:uid('ta'),type:'dot_linked',at:now,userId:user?.id||null,userName:user?.name||'Neznámý',text:`PNEU/DOT záznam propojen: DOT ${recordDotSummary(record)} · ${Number(record.mileage).toLocaleString('cs-CZ')} km`});
-  t.activity=t.activity.slice(-200);
-  await writeTireTasks(rows);
-  return t;
+  const out=await mutateTireTasks(rows=>{const task=linkTaskRecord(rows,record,user,preferredTaskId,{uid,today:pragueDate(record.ts),recordPath,recordDotSummary});return {rows,changed:!!task,task}});
+  return out.task;
 }
 function enrichRecords(cfg, recs) {
   const byUser = Object.fromEntries(cfg.users.map((u) => [u.id, u.name]));
@@ -525,7 +515,7 @@ function touchCar(car, user, at = new Date().toISOString()) {
 function buildVehicleOverview(cfg,recs,tireTasks=[]){
   const rows=enrichRecords(cfg,recs),recordsByCar=new Map(),tasksByCar=new Map();
   for(const r of rows){if(!recordsByCar.has(r.carId))recordsByCar.set(r.carId,[]);recordsByCar.get(r.carId).push(r)}
-  for(const t of tireTasks||[]){if(t.status==='closed')continue;if(!tasksByCar.has(t.carId))tasksByCar.set(t.carId,[]);tasksByCar.get(t.carId).push(t)}
+  for(const t of tireTasks||[]){if(!taskIsActive(t))continue;if(!tasksByCar.has(t.carId))tasksByCar.set(t.carId,[]);tasksByCar.get(t.carId).push(t)}
   return cfg.cars.map((car)=>{
     const activeTasks=(tasksByCar.get(car.id)||[])
       .sort((a,b)=>(String(a.date||'')+'T'+String(a.time||'23:59')).localeCompare(String(b.date||'')+'T'+String(b.time||'23:59')))
@@ -692,10 +682,8 @@ async function publicState(cfg,recs,currentUser){
   const [notifications,tireTaskRows]=await Promise.all([getNotificationLog(),getTireTasks()]);
   const notice=buildNotificationData(cfg,currentUser,notifications,false);
   const publicTasks=publicTireTasks(cfg,tireTaskRows,recs);
-  const myActiveTasks=publicTasks.filter((t)=>t.assignedToUserId===currentUser.id&&t.status!=='closed');
-  const myTaskSummary=myActiveTasks.slice(0,8).map((t)=>({
-    id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carPlate:t.carPlate||'',carName:t.carName||'',category:t.category||'',problemNote:t.problemNote||'',acceptedAt:t.acceptedAt||null,acceptedBy:t.acceptedBy||'',acceptedById:t.acceptedById||null
-  }));
+  const grouped=taskGroups(publicTasks),myActiveTasks=grouped.filter(t=>t.assignedToUserId===currentUser.id&&!t.workClosed);
+  const myTaskSummary=myActiveTasks.slice(0,8).map(t=>({...t,cars:undefined,carPlate:t.kind==='carryover'?t.cars[0].carPlate:'Denní TASK · '+t.vehicleCount+' vozidel',carName:t.cars.map(c=>c.carPlate).join(', ')}));
   const issues=perms.attentionView?computeIssues(cfg,recs):[];
   return {
     syncVersion,
@@ -704,7 +692,7 @@ async function publicState(cfg,recs,currentUser){
     vehicleCategories:cfg.vehicleCategories||DEFAULT_VEHICLE_CATEGORIES,
     cars:cfg.cars.filter((c)=>c.active!==false),
     records,recordTotal:recs.length,
-    taskSummary:{active:tireTaskRows.filter((t)=>t.status!=='closed').length},
+    taskSummary:{active:grouped.filter(t=>!t.systemCompleted).length},
     myTaskSummary,myTaskCount:myActiveTasks.length,
     attentionIssueCount:issues.length,
     tireTaskCapabilities:tireTaskCapabilities(currentUser),
@@ -787,7 +775,7 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
   if(!assignee||!tasks?.length)return {sent:0,failed:0,devices:0};
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c])),first=tasks[0],multi=tasks.length>1;
   const plates=tasks.map((t)=>carById[t.carId]?.plate||'vozidlo').slice(0,4);
-  const title=multi?'Nový plán TASK · '+tasks.length+' vozidel':'Nový TASK – '+(carById[first.carId]?.plate||'vozidlo');
+  const title=first.kind==='carryover'?'Předané vozidlo k dokončení – '+(carById[first.carId]?.plate||'vozidlo'):multi?'Nový denní TASK · '+tasks.length+' vozidel':'Nový TASK – '+(carById[first.carId]?.plate||'vozidlo');
   const body=multi
     ?(first.date||'')+' · '+plates.join(', ')+(tasks.length>4?' +'+(tasks.length-4):'')
     :(first.date||'')+' · '+(first.time||'celý den')+' · '+(first.targetSeason==='winter'?'zimní':'letní')+' pneu';
@@ -801,16 +789,20 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
   await patchNotification(n.id,result);
   return result;
 }
-async function notifyTaskAccepted(cfg,task,actor){
-  const car=cfg.cars.find((c)=>c.id===task.carId);
-  const recipients=cfg.users.filter((u)=>u.active!==false&&u.id!==actor?.id&&normalizeTaskNotifications(u.taskNotifications,u.role).accepted);
-  if(!recipients.length)return {sent:0,failed:0,devices:0};
-  const title='TASK přijat – '+(car?.plate||'vozidlo');
-  const body=(actor?.name||'Uživatel')+' přijal TASK · '+(task.date||'')+' · '+(task.time||'celý den')+' · '+(task.targetSeason==='winter'?'zimní':'letní')+' pneu';
-  const n=await createNotification({type:'task_accepted',channel:'automatic',severity:'important',requiresAck:false,title,body,recipient:'users',recipientUserIds:recipients.map((u)=>u.id),taskId:task.id,carId:task.carId,carPlate:car?.plate||'',byUserId:actor?.id||'system',byUserName:actor?.name||'TASK',byUserRole:actor?.role||''});
-  const result=await sendPushToUsers(cfg,recipients.map((u)=>u.id),{title:'✅ '+title,body,tag:'task-accepted-'+task.id,url:'/?module=tiretask&task='+encodeURIComponent(task.id)});
-  await patchNotification(n.id,result);
-  return result;
+async function notifyTaskEvent(cfg,event,actor){
+  const {key,task,tasks}=event;
+  if(key==='assigned')return notifyTaskAssigned(cfg,tasks,cfg.users.find(u=>u.id===task.assignedToUserId),actor);
+  if(key==='problem')return notifyTaskProblem(cfg,task,actor);
+  const recipients=cfg.users.filter(u=>u.active!==false&&u.id!==actor.id&&hasPermission(u,'notificationsReceive')&&normalizeTaskNotifications(u.taskNotifications,u.role)[key]);
+  if(!recipients.length)return;
+  const car=cfg.cars.find(c=>c.id===task.carId),groupEvent=['accepted','taskCompleted','handedOver'].includes(key);
+  const labels={accepted:'TASK přijat',vehicleStarted:'Pracuji na vozidle',vehicleCompleted:'Vozidlo dokončeno',taskCompleted:'TASK kompletně dokončen',handedOver:'TASK ukončen · vozidlo předáno'};
+  const title=labels[key]+' · '+(groupEvent?(task.kind==='carryover'?car?.plate:tasks.length+' vozidel'):(car?.plate||'vozidlo'));
+  const message=actor.name+' · '+task.date+(key==='handedOver'?' · '+(car?.plate||'vozidlo')+' zůstává v servisu do '+task.handoverDate:'');
+  const ids=recipients.map(u=>u.id),taskId=groupEvent?taskGroupId(task):task.id;
+  const n=await createNotification({type:'task_'+key,channel:'automatic',severity:'important',requiresAck:false,title,body:message,recipient:'users',recipientUserIds:ids,taskId,taskIds:tasks.map(t=>t.id),carId:groupEvent?null:task.carId,carPlate:groupEvent?'':car?.plate||'',byUserId:actor.id,byUserName:actor.name,byUserRole:actor.role});
+  const pushed=await sendPushToUsers(cfg,ids,{title:'📋 '+title,body:message,tag:'task-'+key+'-'+taskId,url:'/?module=tiretask&task='+encodeURIComponent(taskId)});
+  await patchNotification(n.id,pushed);
 }
 async function notifyTaskProblem(cfg,task,actor){
   const car=cfg.cars.find((c)=>c.id===task.carId);
@@ -1007,7 +999,7 @@ export default async function handler(req, res) {
       const [recs,tasks]=await Promise.all([getRecords(),getTireTasks()]);
       const compact=compactRecordsForPermissions(enrichRecords(cfg,recs),{...perms,historyView:false});
       const issues=perms.attentionView?computeIssues(cfg,recs):[];
-      const pneuTasks=(tasks||[]).filter((t)=>t.status!=='closed').map((t)=>({
+      const pneuTasks=(tasks||[]).filter(taskIsActive).map((t)=>({
         id:t.id,date:t.date||'',time:t.time||'',status:t.status||'planned',targetSeason:t.targetSeason||'',carId:t.carId||'',
         category:normalizeTireTaskCategory(cfg,t.category)||cleanVehicleCategory(t.category)||'',problemNote:t.problemNote||'',completedRecordId:t.completedRecordId||null
       }));
@@ -1015,8 +1007,13 @@ export default async function handler(req, res) {
     }
     if(body.action==='taskData'){
       const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView');
-      const publicRows=publicTireTasks(cfg,rows,recs),visibleRows=canCompletedView?publicRows:publicRows.filter((t)=>t.status!=='closed');
-      return json(res,200,{tireTasks:visibleRows,tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[],tireTaskAssignableUsers:(caps.create||caps.edit)?cfg.users.filter((u)=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map((u)=>({id:u.id,name:u.name,role:u.role})):[]});
+      const publicRows=publicTireTasks(cfg,rows,recs),myOrigins=new Set(publicRows.filter(t=>t.assignedToUserId===currentUser.id&&t.originBatchId).map(t=>t.originBatchId));
+      for(const assigned of publicRows.filter(t=>t.assignedToUserId===currentUser.id)){
+        let id=assigned.sourceTaskId;const seen=new Set();while(id&&!seen.has(id)){seen.add(id);const source=publicRows.find(t=>t.id===id);if(!source)break;myOrigins.add(taskGroupId(source));id=source.sourceTaskId}
+      }
+      const visibleRows=canCompletedView?publicRows:publicRows.filter(t=>!taskWorkClosed(t)||t.assignedToUserId===currentUser.id||myOrigins.has(taskGroupId(t)));
+      const users=cfg.users.filter(u=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map(u=>({id:u.id,name:u.name,role:u.role}));
+      return json(res,200,{tireTasks:visibleRows,tireTaskGroups:taskGroups(visibleRows),tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[{id:currentUser.id,name:currentUser.name,role:currentUser.role,active:true}],tireTaskAssignableUsers:(caps.create||caps.edit)?users:[],tireTaskHandoverUsers:users});
     }
     if(body.action==='notificationData'){
       return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
@@ -1091,7 +1088,20 @@ export default async function handler(req, res) {
       const dot=splitDot?dotFront:String(body.dot||'');
       const error = validateRecordFields(car, season, dot, mileage, splitDot, dotFront, dotRear);
       if (error) return json(res, 400, { error });
-      const r = { ts: Date.now(), id: uid(), carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage, userId: currentUser.id };
+      if(body.tireTaskId){
+        const task=(await getTireTasks()).find(t=>t.id===String(body.tireTaskId));
+        if(!task||!taskIsActive(task)||task.assignedToUserId!==currentUser.id||task.carId!==car.id||task.targetSeason!==season)return json(res,409,{error:'TIRETASK_NOT_ASSIGNED',message:'TASK, vozidlo nebo přiřazení se změnilo. Obnov přehled.'});
+        if(!task.acceptedAt||task.acceptedById!==currentUser.id||!task.startedAt)return json(res,409,{error:'TIRETASK_NOT_STARTED',message:'Nejdřív přijmi TASK a u vozidla zvol Pracuji na tom.'});
+        if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED'});
+      }
+      const requestId=cleanText(body.requestId,100),recordId=requestId?'r'+crypto.createHash('sha256').update(currentUser.id+':'+requestId).digest('hex').slice(0,24):uid();
+      const existing=requestId?(await getRecords()).find(r=>r.id===recordId):null;
+      if(existing){
+        if(existing.carId!==car.id||existing.season!==season||existing.dot!==dot||existing.mileage!==mileage||!!existing.splitDot!==splitDot||existing.dotFront!==dotFront||existing.dotRear!==dotRear)return json(res,409,{error:'TIRETASK_CONFLICT',message:'Uložená data se změnila. Obnov přehled.'});
+        const linked=await completeMatchingTireTask(cfg,existing,currentUser,body.tireTaskId||null);
+        return json(res,200,{ok:true,alreadySaved:true,tireTaskLinked:linked?{id:linked.id}:null});
+      }
+      const r = { ts: Date.now(), id: recordId, carId: car.id, season, dot, dotFront, dotRear, splitDot, mileage, userId: currentUser.id };
       const newRecordPath=recordPath(r);
       await put(newRecordPath,'1',{access:'private',addRandomSuffix:false,contentType:'text/plain'});
       await markRecordIndexDirty();
@@ -1099,188 +1109,18 @@ export default async function handler(req, res) {
       await writeConfig(cfg);
       const completedTask=await completeMatchingTireTask(cfg,r,currentUser,body.tireTaskId||null);
       await appendAudit(currentUser, 'record_add', `Přidán záznam ${car.plate} · ${season === 'summer' ? 'Letní' : 'Zimní'} · DOT ${recordDotSummary(r)} · ${mileage} km`, { ...r, tireTaskId:completedTask?.id||null });
-      if(completedTask) await appendAudit(currentUser,'tiretask_auto_complete',`TASK ${car.plate} automaticky označen jako hotový`,{taskId:completedTask.id,recordId:r.id});
-      return json(res, 200, { ok: true, tireTaskCompleted:completedTask ? { id:completedTask.id } : null });
+      if(completedTask) await appendAudit(currentUser,completedTask.workflowVersion?'tiretask_record_saved':'tiretask_auto_complete',`PNEU/DOT propojeno s TASK ${car.plate}`,{taskId:completedTask.id,recordId:r.id});
+      return json(res, 200, { ok: true, tireTaskLinked:completedTask?{id:completedTask.id}:null,tireTaskCompleted:completedTask?.status==='completed'?{id:completedTask.id}:null });
     }
 
-    if (body.action === 'tireTaskCreateBatch') {
-      const caps=tireTaskCapabilities(currentUser);
-      if(!caps.create)return json(res,403,{error:'PERMISSION'});
-      const date=normalizeTaskDate(body.date);
-      const rawEntries=Array.isArray(body.entries)?body.entries:[];
-      if(!rawEntries.length||rawEntries.length>6)return json(res,400,{error:'TIRETASK',message:'Denní plán musí obsahovat 1 až 6 vozidel.'});
-      const entries=rawEntries.slice(0,6);
-      const assignedToUserId=String(body.assignedToUserId||'').trim();
-      const assignee=assignedToUserId?cfg.users.find((u)=>u.id===assignedToUserId&&u.active!==false):null;
-      if(!date)return json(res,400,{error:'TIRETASK_DATE'});
-      if(assignedToUserId&&!assignee)return json(res,404,{error:'USER'});
-      const normalized=[];
-      for(const entry of entries){
-        const rawTime=String(entry?.time||'').trim(),time=rawTime?normalizeTaskTime(rawTime):'';
-        if(rawTime&&!time)return json(res,400,{error:'TIRETASK_TIME'});
-        const car=cfg.cars.find((x)=>x.id===String(entry?.carId||'')&&x.active!==false);
-        if(!car)return json(res,404,{error:'CAR'});
-        const category=normalizeTireTaskCategory(cfg,entry?.category)||normalizeTireTaskCategory(cfg,car.category);
-        if(!category)return json(res,400,{error:'VEHICLE_CATEGORY'});
-        const targetSeason=['summer','winter'].includes(entry?.targetSeason)?entry.targetSeason:'';
-        if(!targetSeason)return json(res,400,{error:'SEASON'});
-        normalized.push({time,car,category,targetSeason});
-      }
-      const now=new Date().toISOString(),batchId=uid('tb'),instructions=cleanText(body.instructions,700);
-      const created=normalized.map((entry,index)=>({
-        id:uid('tt'),batchId,batchIndex:index,date,time:entry.time,carId:entry.car.id,category:entry.category,targetSeason:entry.targetSeason,
-        assignedToUserId:assignee?.id||null,instructions,status:'planned',
-        createdAt:now,createdBy:currentUser.name,createdById:currentUser.id,
-        updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
-        comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:'Položka vytvořena v denním plánu '+(index+1)+'/'+normalized.length}],
-        completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,startedBy:null,startedById:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
-      }));
-      const rows=await getTireTasks();rows.push(...created);await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_batch_create',`Vytvořen TASK plán na ${date} · ${created.length} vozidel${assignee?' · '+assignee.name:''}`,{batchId,date,count:created.length,assignedToUserId:assignee?.id||null,taskIds:created.map((t)=>t.id)});
-      if(assignee)await notifyTaskAssigned(cfg,created,assignee,currentUser).catch((err)=>console.error('task assignment notify',err?.message));
-      return json(res,200,{ok:true,batchId,count:created.length,tasks:publicTireTasks(cfg,created)});
-    }
-
-    if (body.action === 'tireTaskCreate') {
-      const caps=tireTaskCapabilities(currentUser);
-      if(!caps.create)return json(res,403,{error:'PERMISSION'});
-      const date=normalizeTaskDate(body.date),time=body.time?normalizeTaskTime(body.time):'';
-      const car=cfg.cars.find((x)=>x.id===String(body.carId||'')&&x.active!==false);
-      const requestedCategory=body.category===undefined?'':normalizeTireTaskCategory(cfg,body.category);
-      if(body.category!==undefined&&!requestedCategory)return json(res,400,{error:'VEHICLE_CATEGORY'});
-      const category=requestedCategory||normalizeTireTaskCategory(cfg,car?.category)||'POOL';
-      const targetSeason=['summer','winter'].includes(body.targetSeason)?body.targetSeason:'';
-      const assignedToUserId=String(body.assignedToUserId||'').trim();
-      const assignee=assignedToUserId?cfg.users.find((u)=>u.id===assignedToUserId&&u.active!==false):null;
-      if(!date)return json(res,400,{error:'TIRETASK_DATE'});
-      if(body.time&&!time)return json(res,400,{error:'TIRETASK_TIME'});
-      if(!car)return json(res,404,{error:'CAR'});
-      if(!targetSeason)return json(res,400,{error:'SEASON'});
-      if(assignedToUserId&&!assignee)return json(res,404,{error:'USER'});
-      const now=new Date().toISOString();
-      const task={
-        id:uid('tt'),date,time,carId:car.id,category,targetSeason,
-        assignedToUserId:assignee?.id||null,
-        instructions:cleanText(body.instructions,700),status:'planned',
-        createdAt:now,createdBy:currentUser.name,createdById:currentUser.id,
-        updatedAt:now,updatedBy:currentUser.name,updatedById:currentUser.id,
-        comments:[],activity:[{id:uid('ta'),type:'created',at:now,userId:currentUser.id,userName:currentUser.name,text:assignee?'Úkol vytvořen a přiřazen: '+assignee.name:'Úkol vytvořen'}],
-        completedRecordId:null,completedRecordPath:null,completedDot:null,completedMileage:null,completedAt:null,completedBy:null,completedById:null,
-        acceptedAt:null,acceptedBy:null,acceptedById:null,startedAt:null,startedBy:null,startedById:null,problemAt:null,closedAt:null,closedBy:null,closedById:null,problemNote:''
-      };
-      const rows=await getTireTasks();rows.push(task);await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_create',`Vytvořen TASK ${car.plate} na ${date}${time?' '+time:''}${assignee?' · '+assignee.name:''}`,task);
-      if(assignee)await notifyTaskAssigned(cfg,[task],assignee,currentUser).catch((err)=>console.error('task assignment notify',err?.message));
-      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
-    }
-
-    if (body.action === 'tireTaskUpdate') {
-      const caps=tireTaskCapabilities(currentUser);
-      if(!caps.edit)return json(res,403,{error:'PERMISSION'});
-      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
-      if(!task)return json(res,404,{error:'TIRETASK'});
-      if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
-      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový úkol už nelze měnit; nejdřív je potřeba opravit navázaný PNEU/DOT záznam.'});
-      const before={date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,assignedToUserId:task.assignedToUserId||null,instructions:task.instructions};
-      if(body.date!==undefined){const v=normalizeTaskDate(body.date);if(!v)return json(res,400,{error:'TIRETASK_DATE'});task.date=v}
-      if(body.time!==undefined){const raw=String(body.time||'').trim();const v=raw?normalizeTaskTime(raw):'';if(raw&&!v)return json(res,400,{error:'TIRETASK_TIME'});task.time=v}
-      if(body.carId!==undefined){const car=cfg.cars.find((x)=>x.id===String(body.carId)&&x.active!==false);if(!car)return json(res,404,{error:'CAR'});task.carId=car.id}
-      if(body.category!==undefined){const category=normalizeTireTaskCategory(cfg,body.category);if(!category)return json(res,400,{error:'VEHICLE_CATEGORY'});task.category=category}
-      if(body.targetSeason!==undefined&&['summer','winter'].includes(body.targetSeason))task.targetSeason=body.targetSeason;
-      if(body.assignedToUserId!==undefined){
-        const assignedId=String(body.assignedToUserId||'').trim();
-        const assigned=assignedId?cfg.users.find((u)=>u.id===assignedId&&u.active!==false):null;
-        if(assignedId&&!assigned)return json(res,404,{error:'USER'});
-        task.assignedToUserId=assigned?.id||null;
-        if(before.assignedToUserId!==task.assignedToUserId){task.acceptedAt=null;task.acceptedBy=null;task.acceptedById=null}
-      }
-      if(body.instructions!==undefined)task.instructions=cleanText(body.instructions,700);
-      const now=new Date().toISOString();task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'updated',at:now,userId:currentUser.id,userName:currentUser.name,text:'Plán úkolu upraven'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_update','Upraven TASK',{taskId:task.id,before,after:{date:task.date,time:task.time,carId:task.carId,category:task.category,targetSeason:task.targetSeason,assignedToUserId:task.assignedToUserId||null,instructions:task.instructions}});
-      if(before.assignedToUserId!==task.assignedToUserId&&task.assignedToUserId){
-        const newlyAssigned=cfg.users.find((u)=>u.id===task.assignedToUserId&&u.active!==false);
-        if(newlyAssigned)await notifyTaskAssigned(cfg,[task],newlyAssigned,currentUser).catch((err)=>console.error('task reassignment notify',err?.message));
-      }
-      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
-    }
-
-    if (body.action === 'tireTaskAccept') {
-      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
-      if(!task)return json(res,404,{error:'TIRETASK'});
-      if(!task.assignedToUserId||task.assignedToUserId!==currentUser.id)return json(res,403,{error:'TIRETASK_NOT_ASSIGNED',message:'Tento TASK není přiřazený tobě.'});
-      if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
-      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový TASK už nelze přijmout.'});
-      if(task.acceptedAt&&task.acceptedById===currentUser.id)return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0],alreadyAccepted:true});
-      const now=new Date().toISOString();task.acceptedAt=now;task.acceptedBy=currentUser.name;task.acceptedById=currentUser.id;task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'accepted',at:now,userId:currentUser.id,userName:currentUser.name,text:'TASK přijat uživatelem'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_accept','TASK přijat uživatelem '+currentUser.name,{taskId:task.id,acceptedAt:now});
-      await notifyTaskAccepted(cfg,task,currentUser).catch((err)=>console.error('task accepted notify',err?.message));
-      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
-    }
-
-    if (body.action === 'tireTaskComment') {
-      const caps=tireTaskCapabilities(currentUser);
-      if(!caps.comment)return json(res,403,{error:'PERMISSION'});
-      const textValue=cleanText(body.text,500);
-      if(!textValue)return json(res,400,{error:'MESSAGE'});
-      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
-      if(!task)return json(res,404,{error:'TIRETASK'});
-      if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
-      const now=new Date().toISOString(),comment={id:uid('tc'),at:now,userId:currentUser.id,userName:currentUser.name,text:textValue};
-      task.comments=Array.isArray(task.comments)?task.comments:[];task.comments.push(comment);task.comments=task.comments.slice(-100);
-      task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'comment',at:now,userId:currentUser.id,userName:currentUser.name,text:'Přidána poznámka'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_comment','Přidána poznámka k TASK',{taskId:task.id,commentId:comment.id});
-      return json(res,200,{ok:true,comment});
-    }
-
-    if (body.action === 'tireTaskSetStatus') {
-      const caps=tireTaskCapabilities(currentUser);
-      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
-      if(!task)return json(res,404,{error:'TIRETASK'});
-      if(!caps.progress&&task.assignedToUserId!==currentUser.id)return json(res,403,{error:'PERMISSION'});
-      if(task.status==='closed')return json(res,409,{error:'TIRETASK_CLOSED'});
-      if(task.status==='completed')return json(res,409,{error:'TIRETASK_COMPLETED',message:'Hotový úkol už lze pouze okomentovat nebo uzavřít.'});
-      const status=String(body.status||'');
-      if(!['planned','in_progress','problem'].includes(status))return json(res,400,{error:'TIRETASK_STATUS'});
-      if(status==='in_progress'&&task.assignedToUserId&&(!task.acceptedAt||task.acceptedById!==task.assignedToUserId))return json(res,409,{error:'TIRETASK_NOT_ACCEPTED',message:'Přiřazený uživatel musí TASK nejdřív přijmout.'});
-      const now=new Date().toISOString(),before=task.status;task.status=status;
-      task.problemNote=status==='problem'?cleanText(body.problemNote,500):'';
-      if(status==='in_progress'&&!task.startedAt){task.startedAt=now;task.startedBy=currentUser.name;task.startedById=currentUser.id}
-      if(status==='problem')task.problemAt=now;
-      if(status==='planned')task.problemAt=null;
-      task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-      const activityText=status==='in_progress'?(before==='problem'?'Pokračování po problému':'Úkol rozpracován'):status==='problem'?('Problém: '+(task.problemNote||'bez popisu')):'Vráceno do plánovaných';
-      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'status',at:now,userId:currentUser.id,userName:currentUser.name,text:activityText});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_status',`TASK stav ${before} → ${status}`,{taskId:task.id,problemNote:task.problemNote});
-      if(status==='problem')await notifyTaskProblem(cfg,task,currentUser).catch((err)=>console.error('task problem notify',err?.message));
-      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
-    }
-
-    if (body.action === 'tireTaskClose') {
-      const caps=tireTaskCapabilities(currentUser);
-      const rows=await getTireTasks(),task=rows.find((x)=>x.id===String(body.taskId||''));
-      if(!task)return json(res,404,{error:'TIRETASK'});
-      if(!caps.close&&task.assignedToUserId!==currentUser.id)return json(res,403,{error:'PERMISSION'});
-      if(task.status!=='completed')return json(res,409,{error:'TIRETASK_NOT_COMPLETED',message:'Úkol lze uzavřít až po propojeném PNEU/DOT zápisu.'});
-      const now=new Date().toISOString();task.status='closed';task.closedAt=now;task.closedBy=currentUser.name;task.closedById=currentUser.id;task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-      task.activity=Array.isArray(task.activity)?task.activity:[];task.activity.push({id:uid('ta'),type:'closed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Úkol uzavřen jako dokončený'});task.activity=task.activity.slice(-200);
-      await writeTireTasks(rows);await appendAudit(currentUser,'tiretask_close','TASK uzavřen jako dokončený',{taskId:task.id});
-      return json(res,200,{ok:true,task:publicTireTasks(cfg,[task])[0]});
-    }
-
-    if (body.action === 'tireTaskDelete') {
-      const caps=tireTaskCapabilities(currentUser);
-      if(!caps.delete)return json(res,403,{error:'PERMISSION'});
-      const rows=await getTireTasks(),idx=rows.findIndex((x)=>x.id===String(body.taskId||''));
-      if(idx<0)return json(res,404,{error:'TIRETASK'});
-      const task=rows[idx],car=cfg.cars.find((x)=>x.id===task.carId);
-      rows.splice(idx,1);
-      await writeTireTasks(rows);
-      await appendAudit(currentUser,'tiretask_delete','Smazán TASK '+(car?.plate||task.carId||'')+' · '+(task.date||''),{task});
-      return json(res,200,{ok:true,id:task.id});
+    if (TASK_ACTIONS.has(body.action)) {
+      const records=['tireTaskCompleteVehicle','tireTaskClose','tireTaskHandover'].includes(body.action)?await getRecords():[];
+      try{
+        const out=await mutateTireTasks(rows=>applyTaskAction(rows,body,{cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),uid,now:new Date().toISOString(),today:pragueDate(),records,normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user),validateRecord:validateRecordFields}));
+        for(const a of out.audit)await appendAudit(currentUser,a.type,a.message,a.data);
+        for(const event of out.events)await notifyTaskEvent(cfg,event,currentUser).catch(error=>console.error('TASK notification',error?.message));
+        return json(res,200,out.result);
+      }catch(error){if(error instanceof TaskError)return json(res,error.status,{error:error.code,message:error.message});throw error}
     }
 
     if (body.action === 'pushSubscribe') {
@@ -1792,28 +1632,28 @@ export default async function handler(req, res) {
       if(target.role==='admin'||target.id===currentUser.id)return json(res,403,{error:'ADMIN_USER_DELETE',message:'Admin účet nelze smazat.'});
       if(target.deletedAt)return json(res,200,{ok:true,alreadyDeleted:true});
       const now=new Date().toISOString(),targetName=target.name;
-      const tasks=await getTireTasks();let releasedTasks=0;
-      for(const task of tasks){
-        if(task.assignedToUserId===target.id&&!['completed','closed'].includes(task.status)){
-          task.assignedToUserId=null;
+      const released=await mutateTireTasks(tasks=>{
+        const groups=taskGroups(tasks).filter(g=>g.assignedToUserId===target.id&&!g.workClosed);
+        for(const group of groups)for(const task of group.cars){
+          task.assignedToUserId=null;task.acceptedAt=null;task.acceptedBy=null;task.acceptedById=null;task.releasedAfterUserDeletion=true;
+          if(!['completed','closed'].includes(task.status)){task.startedAt=null;task.startedBy=null;task.startedById=null;task.status='planned'}
           task.updatedAt=now;task.updatedBy=currentUser.name;task.updatedById=currentUser.id;
-          task.activity=Array.isArray(task.activity)?task.activity:[];
-          task.activity.push({id:uid('ta'),type:'assignee_removed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Přiřazený uživatel '+targetName+' byl smazán; TASK vrácen mezi nepřiřazené.'});
-          task.activity=task.activity.slice(-200);releasedTasks++;
+          task.activity=[...(task.activity||[]),{id:uid('ta'),type:'assignee_removed',at:now,userId:currentUser.id,userName:currentUser.name,text:'Uživatel '+targetName+' byl smazán; denní TASK čeká na nové přiřazení.'}].slice(-200);
         }
-      }
+        return {rows:tasks,changed:!!groups.length,releasedTasks:groups.length};
+      });
+      const releasedTasks=released.releasedTasks;
       target.active=false;
       target.deletedAt=now;target.deletedBy=currentUser.name;target.deletedById=currentUser.id;
       target.pinHash='';
       target.pinChangeRequired=null;target.failedPinAttempts=0;target.lastFailedPinAt=null;target.loginLockedAt=null;
-      target.permissions={};target.taskNotifications={accepted:false};target.notificationPrefs={operational:false,adminInfo:false};
+      target.permissions={};target.taskNotifications=Object.fromEntries(TASK_NOTICE_KEYS.map(key=>[key,false]));target.notificationPrefs={operational:false,adminInfo:false};
       const modules=normalizeModules(cfg.modules);
       for(const key of MODULE_KEYS)modules[key].allowedUserIds=(modules[key].allowedUserIds||[]).filter((id)=>id!==target.id);
       cfg.modules=modules;
       const [pushes,presence]=await Promise.all([getPushStore(),getPresence()]);
       await Promise.all([
         writeConfig(cfg),
-        releasedTasks?writeTireTasks(tasks):Promise.resolve(),
         writePushStore(pushes.filter((x)=>x.userId!==target.id)),
         writePresence(Object.fromEntries(Object.entries(presence||{}).filter(([id])=>id!==target.id)))
       ]);
@@ -1830,7 +1670,7 @@ export default async function handler(req, res) {
       if (body.pin !== undefined && body.pin !== '') return json(res,400,{error:'PIN_SELF_SERVICE',message:'PIN uživatele mění pouze uživatel přes výzvu ke změně PINu.'});
       if(body.taskNotifications&&typeof body.taskNotifications==='object'){
         const taskNotifications=normalizeTaskNotifications(target.taskNotifications,target.role);
-        if(typeof body.taskNotifications.accepted==='boolean')taskNotifications.accepted=body.taskNotifications.accepted;
+        for(const key of TASK_NOTICE_KEYS)if(typeof body.taskNotifications[key]==='boolean')taskNotifications[key]=body.taskNotifications[key];
         target.taskNotifications=taskNotifications;
       }
       if (target.role !== 'admin') {
