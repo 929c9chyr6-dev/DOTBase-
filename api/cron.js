@@ -1,5 +1,7 @@
 import { put, get, list } from '@vercel/blob';
 import webpush from 'web-push';
+import { mutateBlobJsonArray } from '../lib/blob-json.js';
+import { noticeAudit, touchNoticeSync } from '../lib/manual-notifications.js';
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
@@ -39,22 +41,17 @@ async function getRecords() {
 }
 function latest(recs, carId, season) { return recs.find((r) => r.carId === carId && (!season || r.season === season)); }
 function canReceiveNotifications(user) { return user?.role === 'admin' || user?.permissions?.notificationsReceive !== false; }
-async function getNotificationLog() { return await readJson('notifications.json', []); }
-async function writeNotificationLog(rows) { await writeJson('notifications.json', rows.slice(0, 500)); }
 function nid(prefix = 'n') { return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
 async function createNotification(row) {
-  const rows = await getNotificationLog();
   const n = { id: nid(), ts: Date.now(), createdAt: new Date().toISOString(), channel:'automatic', severity:'info', requiresAck:false, recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))], acks: [], seen: [], ...row };
-  rows.unshift(n); await writeNotificationLog(rows); return n;
+  await mutateBlobJsonArray('notifications.json', rows=>({rows:[n,...rows].slice(0,500),changed:true}));
+  await touchNoticeSync(); return n;
 }
 async function patchNotification(id, patch) {
-  const rows = await getNotificationLog(); const n = rows.find((x) => x.id === id); if (!n) return null;
-  Object.assign(n, patch); await writeNotificationLog(rows); return n;
+  const out=await mutateBlobJsonArray('notifications.json',rows=>{const n=rows.find(x=>x.id===id);if(n)Object.assign(n,patch);return {rows,changed:!!n,notice:n||null}});return out.notice;
 }
 async function appendAudit(summary, details) {
-  const rows = await readJson('audit.json', []);
-  rows.unshift({ id: `a${Date.now().toString(36)}${Math.random().toString(36).slice(2,7)}`, ts: Date.now(), createdAt: new Date().toISOString(), actorId: 'system', actorName: 'Systém', action: 'automatic_notification', summary, details });
-  await writeJson('audit.json', rows.slice(0, 500));
+  await noticeAudit(null,'automatic_notification',summary,details);
 }
 async function sendToUsers(userIds, payload) {
   let pushes = await readJson('push.json', []);
@@ -71,8 +68,7 @@ async function sendToUsers(userIds, payload) {
     }
   }
   if (dead.size) {
-    pushes = pushes.filter((p) => !dead.has(p.id));
-    await writeJson('push.json', pushes);
+    await mutateBlobJsonArray('push.json',rows=>({rows:rows.filter(p=>!dead.has(p.id)),changed:rows.some(p=>dead.has(p.id))}));
   }
   return { sent, failed, devices: targets.length };
 }

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import webpush from 'web-push';
 import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, taskDotOrder, taskRequiresBothRecords, taskSeasonRecord, taskSeasonRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
 import { mutateBlobJsonArray, BlobJsonConflictError } from '../lib/blob-json.js';
+import { NoticeError, noticeDraft, deliverNotice, createSchedule, changeSchedule, scheduledNoticeData, noticeAudit, SCHEDULE_PATH } from '../lib/manual-notifications.js';
 
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
@@ -102,7 +103,7 @@ function actionModule(action){
   if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
   if (action==='taskData'||TASK_ACTIONS.has(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
-  if (['notificationData','sendOperationalNotification'].includes(action)) return 'notifications';
+  if (['notificationData','sendOperationalNotification','adminSendNotification','notificationScheduleEdit','notificationScheduleCancel'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
   return null;
 }
@@ -350,9 +351,7 @@ async function getRecords(){
 }
 async function getAudit() { return await readJson('audit.json', []); }
 async function appendAudit(actor, action, summary, details = null) {
-  const audit = await getAudit();
-  audit.unshift({ id: uid('a'), ts: Date.now(), createdAt: new Date().toISOString(), actorId: actor?.id || 'system', actorName: actor?.name || 'Systém', action, summary, details });
-  await writeJson('audit.json', audit.slice(0, 500));
+  await noticeAudit(actor, action, summary, details);
 }
 async function getPushStore() { return await readJson('push.json', []); }
 async function writePushStore(rows) { await writeJson('push.json', rows.slice(0, 1000)); }
@@ -389,19 +388,6 @@ function normalizeNotificationRecord(n) {
   return {...n,channel,severity,requiresAck,expiresAt,legacyPassive,acks:Array.isArray(n?.acks)?n.acks:[],seen:Array.isArray(n?.seen)?n.seen:[]};
 }
 function notificationExpired(n,now=Date.now()){return !!(n?.expiresAt&&Date.parse(n.expiresAt)<=now)}
-function normalizeNotificationExpiry(v){
-  if(!v)return null;
-  const ts=Date.parse(String(v));
-  return Number.isFinite(ts)&&ts>Date.now()?new Date(ts).toISOString():null;
-}
-function userAllowsNotification(user,channel,severity){
-  const prefs=normalizeUserNotificationPrefs(user?.notificationPrefs);
-  if(channel==='admin'&&(severity==='important'||severity==='critical'))return true;
-  if(channel==='operational'&&severity==='important')return true;
-  if(channel==='operational')return prefs.operational;
-  if(channel==='admin')return prefs.adminInfo;
-  return true;
-}
 function canViewNotification(n,user){
   if(!n||n.retractedAt||!Array.isArray(n.recipientUserIds)||!n.recipientUserIds.includes(user.id))return false;
   if(!String(n.type||'').startsWith('task_'))return true;
@@ -768,8 +754,7 @@ async function sendPushToUsers(cfg, userIds, payload) {
     }
   }
   if (dead.size) {
-    pushes = pushes.filter((p) => !dead.has(p.id));
-    await writePushStore(pushes);
+    await mutateJsonArray('push.json',rows=>({rows:rows.filter(p=>!dead.has(p.id)),changed:rows.some(p=>dead.has(p.id))}));
   }
   return { sent, failed, devices: targets.length };
 }
@@ -1021,7 +1006,12 @@ export default async function handler(req, res) {
       return json(res,200,{tireTasks:visibleRows,tireTaskGroups:taskGroups(visibleRows),tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[{id:currentUser.id,name:currentUser.name,role:currentUser.role,active:true}],tireTaskAssignableUsers:(caps.create||caps.edit)?users:[],tireTaskHandoverUsers:users});
     }
     if(body.action==='notificationData'){
-      return json(res,200,buildNotificationData(cfg,currentUser,await getNotificationLog(),true));
+      const [notifications,notificationSchedules]=await Promise.all([getNotificationLog(),scheduledNoticeData(cfg,currentUser)]);
+      return json(res,200,{...buildNotificationData(cfg,currentUser,notifications,true),notificationSchedules});
+    }
+    if(body.action==='notificationScheduleEdit'||body.action==='notificationScheduleCancel'){
+      const row=await changeSchedule(cfg,currentUser,body,body.action==='notificationScheduleCancel');
+      return json(res,200,{ok:true,scheduleId:row.id,status:row.status,scheduledAt:row.scheduledAt,version:row.version});
     }
     if(body.action==='fleetData'){
       if(!hasPermission(currentUser,'fleetView'))return json(res,403,{error:'PERMISSION'});
@@ -1225,21 +1215,13 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'sendOperationalNotification') {
-      if(!hasPermission(currentUser,'notificationsSendOperational'))return json(res,403,{error:'PERMISSION'});
-      const title=cleanText(body.title,80),message=cleanText(body.message,500),recipient=String(body.recipient||'all');
-      const severity=['info','important'].includes(body.severity)?body.severity:'info';
-      const requiresAck=!!body.requiresAck,expiresAt=body.expiresAt?normalizeNotificationExpiry(body.expiresAt):null;
-      if(!title||!message)return json(res,400,{error:'MESSAGE'});
-      if(body.expiresAt&&!expiresAt)return json(res,400,{error:'MESSAGE',message:'Platnost oznámení musí být v budoucnu.'});
-      let users=cfg.users.filter((u)=>u.active&&hasPermission(u,'notificationsReceive')&&userAllowsNotification(u,'operational',severity));
-      if(recipient!=='all')users=users.filter((u)=>u.id===recipient);
-      if(!users.length)return json(res,404,{error:'USER',message:'Žádný z vybraných uživatelů nemá povolená provozní oznámení.'});
-      const n=await createNotification({type:'operational_manual',channel:'operational',severity,requiresAck,expiresAt,title,body:message,recipient,recipientUserIds:users.map((u)=>u.id),byUserId:currentUser.id,byUserName:currentUser.name,byUserRole:currentUser.role});
-      const senderLabel=currentUser.role==='dispatch'?'DISPATCH':currentUser.role==='technician'?'TECHNIK':currentUser.role==='driver'?'DRIVER':currentUser.role==='test'?'TEST':'PROVOZ';
-      const result=await sendPushToUsers(cfg,users.map((u)=>u.id),{title:'🔵 '+senderLabel+(severity==='important'?' · DŮLEŽITÉ':'')+' · '+title,body:message,tag:'notification-'+n.id,url:'/?module=notifications&notification='+encodeURIComponent(n.id)});
-      await patchNotification(n.id,result);
-      await appendAudit(currentUser,'operational_notification_send','Odesláno provozní oznámení „'+title+'“ ('+result.sent+'/'+(result.devices||0)+')',{notificationId:n.id,recipient,severity,requiresAck,expiresAt,...result});
-      return json(res,200,{ok:true,notificationId:n.id,...result});
+      if(body.deliveryMode==='scheduled'||body.scheduledAt||body.scheduledLocal){
+        const row=await createSchedule(cfg,currentUser,'operational',body);
+        return json(res,200,{ok:true,scheduled:true,scheduleId:row.id,scheduledAt:row.scheduledAt});
+      }
+      const draft=noticeDraft(cfg,currentUser,'operational',body),result=await deliverNotice(cfg,currentUser,draft);
+      await appendAudit(currentUser,'operational_notification_send','Odesláno provozní oznámení „'+draft.title+'“',{...result,recipient:draft.recipient,severity:draft.severity,requiresAck:draft.requiresAck,expiresAt:draft.expiresAt});
+      return json(res,200,{ok:true,...result});
     }
 
     if (body.action === 'editRecord') {
@@ -1741,33 +1723,25 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'adminSendNotification') {
-      const title=cleanText(body.title,80),message=cleanText(body.message,500),recipient=String(body.recipient||'all');
-      const severity=['info','important','critical'].includes(body.severity)?body.severity:'info';
-      const requiresAck=severity==='critical'?true:!!body.requiresAck;
-      const expiresAt=body.expiresAt?normalizeNotificationExpiry(body.expiresAt):null;
-      if(!title||!message)return json(res,400,{error:'MESSAGE'});
-      if(body.expiresAt&&!expiresAt)return json(res,400,{error:'MESSAGE',message:'Platnost oznámení musí být v budoucnu.'});
-      let users=cfg.users.filter((u)=>u.active&&(severity!=='info'||(hasPermission(u,'notificationsReceive')&&userAllowsNotification(u,'admin',severity))));
-      if(recipient!=='all')users=users.filter((u)=>u.id===recipient);
-      if(!users.length)return json(res,404,{error:'USER',message:'Žádný příjemce pro toto oznámení.'});
-      const carId=body.carId?String(body.carId):null,car=carId?cfg.cars.find((c)=>c.id===carId):null;
-      if(carId&&!car)return json(res,404,{error:'CAR'});
-      const n=await createNotification({type:'admin_manual',channel:'admin',severity,requiresAck,expiresAt,title,body:message,recipient,recipientUserIds:users.map((u)=>u.id),carId:car?.id||null,carPlate:car?.plate||'',byUserId:currentUser.id,byUserName:currentUser.name,byUserRole:'admin'});
-      const adminPriority=severity==='critical'?' · KRITICKÉ':severity==='important'?' · DŮLEŽITÉ':'';
-      const result=await sendPushToUsers(cfg,users.map((u)=>u.id),{title:'🚨 ADMIN'+adminPriority+' · '+title,body:message,tag:'notification-'+n.id,url:'/?module=notifications&notification='+encodeURIComponent(n.id)});
-      await patchNotification(n.id,result);
-      await appendAudit(currentUser,'admin_notification_send','Odesláno Admin oznámení „'+title+'“ ('+result.sent+'/'+(result.devices||0)+')',{notificationId:n.id,recipient,severity,requiresAck,expiresAt,carId:car?.id||null,...result});
-      return json(res,200,{ok:true,notificationId:n.id,...result});
+      if(body.deliveryMode==='scheduled'||body.scheduledAt||body.scheduledLocal){
+        const row=await createSchedule(cfg,currentUser,'admin',body);
+        return json(res,200,{ok:true,scheduled:true,scheduleId:row.id,scheduledAt:row.scheduledAt});
+      }
+      const draft=noticeDraft(cfg,currentUser,'admin',body),result=await deliverNotice(cfg,currentUser,draft);
+      await appendAudit(currentUser,'admin_notification_send','Odesláno Admin oznámení „'+draft.title+'“',{...result,recipient:draft.recipient,severity:draft.severity,requiresAck:draft.requiresAck,expiresAt:draft.expiresAt,carId:draft.carId});
+      return json(res,200,{ok:true,...result});
     }
 
     if (body.action === 'adminBackup') {
-      const [recs, audit, notifications] = await Promise.all([getRecords(), getAudit(), getNotificationLog()]);
+      const [recs, audit, notifications, notificationSchedules] = await Promise.all([getRecords(), getAudit(), getNotificationLog(), readJson(SCHEDULE_PATH,[])]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 8, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications: notifications.filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n?.type||''))), notificationSettings: cfg.notificationSettings, system: systemState(cfg), modules: normalizeModules(cfg.modules) });
+      return json(res, 200, { version: 9, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications: notifications.filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n?.type||''))), notificationSchedules, notificationSettings: cfg.notificationSettings, system: systemState(cfg), modules: normalizeModules(cfg.modules) });
     }
 
     return json(res, 400, { error: 'ACTION' });
   } catch (e) {
+    if(e instanceof NoticeError)return json(res,e.status,{error:e.code,message:e.message});
+    if(e instanceof BlobJsonConflictError)return json(res,409,{error:'NOTICE_CONFLICT',message:'Data mezitím změnil jiný uživatel. Obnov přehled a zopakuj akci.'});
     console.error(e);
     return json(res, 500, { error: 'SERVER' });
   }

@@ -52,6 +52,7 @@ function lockApp(message='',cls='msg'){
   if(taskDotContext)restoreTaskDotForm();
   closeTaskEdit();
   closeAdminOwnPinChange();
+  closeScheduleEdit();resetNoticeComposers();
   taskDraftTimers.forEach(timer=>clearTimeout(timer));taskDraftTimers.clear();taskDrafts.clear();taskSeasonDrafts.clear();taskDraftStates.clear();taskOpenVehicles.clear();taskBusy.clear();taskRecordRequests.clear();pendingTireTaskId=null;
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
   if(lastUserId)localStorage.setItem('lastLoginUserId',lastUserId);
@@ -361,8 +362,114 @@ function notificationUiMeta(n){
 function notificationKindHtml(m){
   return '<span class="notification-source">'+m.icon+' '+e(m.label)+'</span>'+(m.priority?'<span class="notification-priority">'+e(m.priority)+'</span>':'');
 }
-function notificationRecipientOptions(selected=''){
-  return '<option value="all">Všichni aktivní uživatelé</option>'+(D.notificationRecipients||[]).map(u=>'<option value="'+e(u.id)+'" '+(selected===u.id?'selected':'')+'>'+e(u.name)+' · '+e(roleLabel(u.role))+'</option>').join('');
+let scheduleEditContext=null;
+const noticeRequestCache=new Map(),noticeComposerBusy=new Set();
+function noticePragueLocal(iso){return iso?new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Prague',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(iso)).replace(' ','T'):''}
+function noticePragueDate(iso){return iso?new Intl.DateTimeFormat('cs-CZ',{timeZone:'Europe/Prague',year:'numeric',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}).format(new Date(iso)):'—'}
+function selectedNoticeIds(prefix){return [...$(prefix+'RecipientList').querySelectorAll('input:checked')].map(input=>input.value)}
+function updateNoticeRecipients(prefix){
+  $(prefix+'RecipientsWrap').hidden=$(prefix+'Recipient').value!=='selected';
+  $(prefix+'RecipientCount').textContent='Vybráno: '+selectedNoticeIds(prefix).length;
+}
+function renderNoticeRecipients(prefix,initial=null){
+  const list=$(prefix+'RecipientList');if(!list)return;
+  const selected=new Set(initial||selectedNoticeIds(prefix)),users=(D.notificationRecipients||[]).slice(),previousNames=new Map([...list.querySelectorAll('input')].map(input=>[input.value,input.closest('label')?.querySelector('b')?.textContent]));
+  // Keep a selected, since-deactivated recipient visible until explicitly removed.
+  for(const id of selected)if(!users.some(u=>u.id===id))users.push({id,name:previousNames.get(id)||(D.notificationSchedules||[]).flatMap(n=>n.recipients||[]).find(u=>u.id===id)?.name||'Neaktivní uživatel',role:'',inactive:true});
+  const signature=JSON.stringify(users);
+  if(initial||list.dataset.signature!==signature){
+    list.dataset.signature=signature;
+    list.innerHTML=users.map(u=>'<label class="notice-recipient-choice"><input type="checkbox" value="'+e(u.id)+'" '+(selected.has(u.id)?'checked':'')+'><span><b>'+e(u.name)+'</b><small>'+e(u.inactive?'Účet není aktivní · odeber z výběru':roleLabel(u.role))+'</small></span></label>').join('')||'<div class="small">Žádní aktivní uživatelé.</div>';
+    list.querySelectorAll('input').forEach(input=>input.onchange=()=>updateNoticeRecipients(prefix));
+  }
+  updateNoticeRecipients(prefix);
+}
+function updateNoticeTiming(prefix){
+  const scheduled=$(prefix+'Timing').value==='scheduled';$(prefix+'ScheduledWrap').hidden=!scheduled;
+  $(prefix+'Scheduled').min=noticePragueLocal(new Date(Math.ceil((Date.now()+1000)/60000)*60000).toISOString());
+  const button=$(prefix==='operational'?'sendOperationalNotice':'sendAdminNotice');
+  button.textContent=scheduled?'🕒 Naplánovat oznámení':prefix==='operational'?'🔔 Odeslat provozní oznámení':'🛡️ Odeslat Admin oznámení';
+}
+function noticeFormData(prefix,titleId=prefix+'Title'){
+  const recipient=$(prefix+'Recipient').value;
+  if(recipient==='selected'&&!selectedNoticeIds(prefix).length)throw new Error('NOTICE_NO_RECIPIENT');
+  const scheduled=prefix==='scheduleEdit'||$(prefix+'Timing').value==='scheduled';
+  if(scheduled&&!$(prefix+'Scheduled').value)throw new Error('NOTICE_NO_TIME');
+  return {deliveryMode:scheduled?'scheduled':'now',recipient,recipientUserIds:recipient==='selected'?selectedNoticeIds(prefix):[],severity:$(prefix+'Severity').value,title:$(titleId).value.trim(),message:$(prefix+'Message').value.trim(),requiresAck:$(prefix+'Ack').checked,expiresLocal:$(prefix+'Expires').value||null,scheduledLocal:scheduled?$(prefix+'Scheduled').value:null,carId:$(prefix+'Vehicle')?.value||null};
+}
+function noticeFormError(x){return x.message==='NOTICE_NO_RECIPIENT'?'Vyber alespoň jednoho příjemce.':x.message==='NOTICE_NO_TIME'?'Vyber datum a čas odeslání.':errorText(x)}
+function resetNoticeComposers(){
+  noticeRequestCache.clear();noticeComposerBusy.clear();
+  for(const prefix of ['operational','adminNotice']){
+    for(const suffix of ['Title','Message','Expires','Scheduled'])$(prefix+suffix).value='';
+    $(prefix+'Recipient').value='all';$(prefix+'Timing').value='now';$(prefix+'Severity').value='info';$(prefix+'Ack').checked=false;
+    $(prefix+'RecipientList').innerHTML='';delete $(prefix+'RecipientList').dataset.signature;
+    $(prefix==='operational'?'operationalNoticeMsg':'adminNoticeMsg').replaceChildren();
+    const composer=$(prefix==='operational'?'operationalComposer':'adminComposer');composer.querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=false);
+    updateNoticeTiming(prefix);updateNoticeRecipients(prefix);
+  }
+  $('adminNoticeVehicle').value='';$('adminNoticeMsg').replaceChildren();$('notificationSchedulesMsg').replaceChildren();updateAdminNoticeSeverity();
+}
+async function submitNotice(prefix){
+  if(noticeComposerBusy.has(prefix))return;
+  const channel=prefix==='operational'?'operational':'admin',msg=$(channel==='operational'?'operationalNoticeMsg':'adminNoticeMsg'),composer=$(channel==='operational'?'operationalComposer':'adminComposer'),session=tok;
+  let data;try{data=noticeFormData(prefix)}catch(x){note(msg,noticeFormError(x),'msg err');return}
+  const signature=JSON.stringify(data),cached=noticeRequestCache.get(prefix);
+  const requestId=cached?.signature===signature?cached.id:crypto.randomUUID();noticeRequestCache.set(prefix,{signature,id:requestId});
+  noticeComposerBusy.add(prefix);composer.querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=true);
+  try{
+    const r=await api(channel==='operational'?'sendOperationalNotification':'adminSendNotification',{...data,requestId});if(tok!==session)return;
+    for(const suffix of ['Title','Message','Expires','Scheduled'])$(prefix+suffix).value='';
+    $(prefix+'Timing').value='now';$(prefix+'Ack').checked=false;noticeRequestCache.delete(prefix);
+    if(channel==='admin'){$('adminNoticeVehicle').value='';$('adminNoticeSeverity').value='info'}
+    note(msg,r.scheduled?'Naplánováno na '+noticePragueDate(r.scheduledAt)+'.':'Odesláno příjemcům: '+r.recipientCount+' · push '+r.sent+'/'+(r.devices||0)+'.','msg ok');
+    await refresh();
+  }catch(x){if(tok===session)note(msg,noticeFormError(x),'msg err')}
+  finally{if(tok===session){noticeComposerBusy.delete(prefix);composer.querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=false);updateNoticeTiming(prefix);updateAdminNoticeSeverity()}}
+}
+function renderScheduledNotices(){
+  const rows=D.notificationSchedules||[],visible=me?.role==='admin'||can('notificationsSendOperational');
+  $('notificationSchedulesCard').hidden=!visible;if(!visible)return;
+  const active=rows.filter(n=>['scheduled','processing'].includes(n.status)),history=rows.filter(n=>!['scheduled','processing'].includes(n.status));
+  $('notificationSchedulesCount').textContent=String(active.length);
+  const item=n=>{
+    const m=notificationUiMeta(n),status={scheduled:'Čeká na odeslání',processing:'Probíhá odesílání',sent:'Odesláno',cancelled:'Zrušeno',failed:'Neodesláno'}[n.status]||n.status;
+    const recipients=n.recipient==='all'?'Všichni aktivní uživatelé':(n.recipients||[]).map(u=>u.name+(u.active?'':' (neaktivní)')).join(', ');
+    return '<div class="scheduled-notice" data-schedule-id="'+e(n.id)+'"><div class="top"><div class="notification-kind">'+notificationKindHtml(m)+'</div><span class="badge '+(n.status==='sent'?'good':n.status==='failed'?'danger':'')+'">'+e(status)+'</span></div><h3>'+e(n.title)+'</h3><div class="scheduled-notice-time">'+e(noticePragueDate(n.scheduledAt))+'</div><div class="small">Komu: '+e(recipients)+'</div><div class="small">'+e(n.byUserName||'')+(n.carPlate?' · '+e(n.carPlate):'')+(n.expiresAt?' · platí do '+e(noticePragueDate(n.expiresAt)):'')+(n.status==='sent'?' · doručeno příjemcům: '+Number(n.recipientCount||0):'')+'</div>'+(n.error?'<div class="msg err">'+e(n.error)+'</div>':'')+'<details><summary>Text oznámení</summary><div class="notification-body">'+e(n.body)+'</div></details>'+(n.editable?'<div class="toolbar"><button class="secondary notice-schedule-edit" data-id="'+e(n.id)+'">✏️ Upravit</button><button class="danger-btn notice-schedule-cancel" data-id="'+e(n.id)+'">Zrušit odeslání</button></div>':'')+'</div>';
+  };
+  $('notificationSchedulesList').innerHTML=active.map(item).join('')+(active.length?'':'<div class="small" style="margin-top:12px">Žádná oznámení nečekají na odeslání.</div>')+(history.length?'<details style="margin-top:12px"><summary>Odeslaná a zrušená oznámení ('+history.length+')</summary>'+history.map(item).join('')+'</details>':'');
+  $('notificationSchedulesList').querySelectorAll('.notice-schedule-edit').forEach(b=>b.onclick=()=>openScheduleEdit(b.dataset.id));
+  $('notificationSchedulesList').querySelectorAll('.notice-schedule-cancel').forEach(b=>b.onclick=()=>cancelScheduledNotice(b.dataset.id,b));
+}
+function closeScheduleEdit(){
+  scheduleEditContext=null;$('scheduleEditOverlay').hidden=true;
+  $('scheduleEditOverlay').querySelectorAll('input,textarea').forEach(el=>{el.value='';el.checked=false});$('scheduleEditRecipientList').replaceChildren();delete $('scheduleEditRecipientList').dataset.signature;$('scheduleEditMsg').replaceChildren();
+  if($('taskEditOverlay').hidden&&$('taskDotOverlay').hidden&&$('adminOwnPinOverlay').hidden)document.body.style.overflow='';
+}
+function openScheduleEdit(id){
+  const row=(D.notificationSchedules||[]).find(n=>n.id===id);if(!row?.editable)return;
+  scheduleEditContext={id,version:row.version,channel:row.channel};const admin=row.channel==='admin';
+  $('scheduleEditOverlay').querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=false);
+  $('scheduleEditMeta').textContent=admin?'🛡️ Admin oznámení':'🔔 Provozní oznámení';$('scheduleEditRecipient').value=row.recipient==='all'?'all':'selected';renderNoticeRecipients('scheduleEdit',row.recipientUserIds||[]);
+  $('scheduleEditSeverity').innerHTML='<option value="info">ℹ️ Běžné</option><option value="important">⚠️ Důležité</option>'+(admin?'<option value="critical">🚨 Kritické systémové</option>':'');$('scheduleEditSeverity').value=row.severity;
+  $('scheduleEditNoticeTitle').value=row.title;$('scheduleEditMessage').value=row.body;$('scheduleEditScheduled').value=noticePragueLocal(row.scheduledAt);$('scheduleEditExpires').value=noticePragueLocal(row.expiresAt);$('scheduleEditAck').checked=row.requiresAck;
+  $('scheduleEditVehicleWrap').hidden=!admin;$('scheduleEditVehicle').innerHTML='<option value="">Bez konkrétního vozidla</option>'+(D.allCars||D.cars||[]).filter(c=>c.active!==false).map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');$('scheduleEditVehicle').value=row.carId||'';
+  updateScheduleEditSeverity();$('scheduleEditMsg').replaceChildren();$('scheduleEditOverlay').hidden=false;document.body.style.overflow='hidden';$('scheduleEditRecipient').focus();$('scheduleEditOverlay').querySelector('.modal-card').scrollTop=0;
+}
+function updateScheduleEditSeverity(){const critical=$('scheduleEditSeverity').value==='critical';$('scheduleEditAck').disabled=critical;if(critical)$('scheduleEditAck').checked=true}
+async function submitScheduleEdit(){
+  const context=scheduleEditContext,session=tok;if(!context||context.saving)return;
+  let data;try{data=noticeFormData('scheduleEdit','scheduleEditNoticeTitle')}catch(x){note($('scheduleEditMsg'),noticeFormError(x),'msg err');return}
+  context.saving=true;$('scheduleEditOverlay').querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=true);
+  try{await api('notificationScheduleEdit',{...data,scheduleId:context.id,version:context.version});if(tok!==session||scheduleEditContext!==context)return;closeScheduleEdit();note($('notificationSchedulesMsg'),'Plánované oznámení je upravené.','msg ok');await refresh()}
+  catch(x){if(tok===session&&scheduleEditContext===context)note($('scheduleEditMsg'),errorText(x),'msg err')}
+  finally{if(scheduleEditContext===context){context.saving=false;$('scheduleEditOverlay').querySelectorAll('input,select,textarea,button').forEach(el=>el.disabled=false);updateScheduleEditSeverity()}}
+}
+async function cancelScheduledNotice(id,button){
+  const row=(D.notificationSchedules||[]).find(n=>n.id===id),session=tok;if(!row?.editable||!confirm('Zrušit naplánované odeslání oznámení „'+row.title+'“?'))return;
+  button.disabled=true;
+  try{await api('notificationScheduleCancel',{scheduleId:id,version:row.version});if(tok!==session)return;note($('notificationSchedulesMsg'),'Odeslání je zrušené.','msg ok');await refresh()}
+  catch(x){if(tok===session){note($('notificationSchedulesMsg'),errorText(x),'msg err');button.disabled=false;await refresh().catch(()=>{})}}
 }
 function notificationExpiresText(n){return n?.expiresAt?' · platí do '+dt(n.expiresAt):''}
 function renderNotificationSettings(){
@@ -377,12 +484,13 @@ function renderNotifications(){
   $('operationalComposer').hidden=!canSend;
   $('adminComposer').hidden=me?.role!=='admin';
   if(canSend){
-    const cur=$('operationalRecipient').value;$('operationalRecipient').innerHTML=notificationRecipientOptions(cur);if(cur==='all'||(D.notificationRecipients||[]).some(u=>u.id===cur))$('operationalRecipient').value=cur;
+    renderNoticeRecipients('operational');updateNoticeTiming('operational');
   }
   if(me?.role==='admin'){
-    const cur=$('adminNoticeRecipient').value;$('adminNoticeRecipient').innerHTML=notificationRecipientOptions(cur);if(cur==='all'||(D.notificationRecipients||[]).some(u=>u.id===cur))$('adminNoticeRecipient').value=cur;
+    renderNoticeRecipients('adminNotice');updateNoticeTiming('adminNotice');
     const car=$('adminNoticeVehicle').value;$('adminNoticeVehicle').innerHTML='<option value="">Bez konkrétního vozidla</option>'+(D.allCars||D.cars||[]).filter(c=>c.active!==false).map(c=>'<option value="'+e(c.id)+'">'+e(c.plate)+' — '+e(c.name||'')+'</option>').join('');if((D.allCars||D.cars||[]).some(c=>c.id===car))$('adminNoticeVehicle').value=car;
   }
+  renderScheduledNotices();
   document.querySelectorAll('[data-notification-view]').forEach(b=>b.classList.toggle('active',b.dataset.notificationView===notificationView));
   let rows=(D.notificationInbox||[]).slice();
   if(notificationView==='operational')rows=rows.filter(n=>n.channel==='operational');
@@ -1825,11 +1933,15 @@ if($('saveNotificationPrefs'))$('saveNotificationPrefs').onclick=async()=>{
   const prefs={operational:$('prefOperationalNotifications').checked,adminInfo:$('prefAdminInfoNotifications').checked};
   try{const r=await api('saveNotificationPrefs',{prefs});D.notificationPrefs=r.prefs;note($('notificationPrefsMsg'),'Nastavení oznámení je uložené.','msg ok');renderNotificationSettings()}catch(x){note($('notificationPrefsMsg'),errorText(x),'msg err')}
 };
-if($('sendOperationalNotice'))$('sendOperationalNotice').onclick=async()=>{
-  const expiresRaw=$('operationalExpires').value;
-  const data={recipient:$('operationalRecipient').value,severity:$('operationalSeverity').value,title:$('operationalTitle').value.trim(),message:$('operationalMessage').value.trim(),requiresAck:$('operationalAck').checked,expiresAt:expiresRaw?new Date(expiresRaw).toISOString():null};
-  try{const r=await api('sendOperationalNotification',data);note($('operationalNoticeMsg'),'Odesláno · push '+r.sent+'/'+(r.devices||0)+'.','msg ok');$('operationalTitle').value=$('operationalMessage').value=$('operationalExpires').value='';$('operationalAck').checked=false;await refresh()}catch(x){note($('operationalNoticeMsg'),errorText(x),'msg err')}
-};
+if($('sendOperationalNotice'))$('sendOperationalNotice').onclick=()=>submitNotice('operational');
+for(const prefix of ['operational','adminNotice']){
+  $(prefix+'Recipient').onchange=()=>updateNoticeRecipients(prefix);
+  $(prefix+'Timing').onchange=()=>updateNoticeTiming(prefix);
+}
+$('scheduleEditRecipient').onchange=()=>updateNoticeRecipients('scheduleEdit');
+$('scheduleEditSeverity').onchange=updateScheduleEditSeverity;
+$('scheduleEditSubmit').onclick=submitScheduleEdit;
+for(const id of ['scheduleEditCancel','scheduleEditClose'])$(id).onclick=()=>{if(!scheduleEditContext?.saving)closeScheduleEdit()};
 function updateAdminNoticeSeverity(){
   if(!$('adminNoticeSeverity'))return;
   const critical=$('adminNoticeSeverity').value==='critical';
@@ -1838,11 +1950,7 @@ function updateAdminNoticeSeverity(){
   if($('adminNoticeSeverityHelp'))$('adminNoticeSeverityHelp').textContent=critical?'Kritické oznámení vždy obejde uživatelské preference a vyžaduje potvrzení.':$('adminNoticeSeverity').value==='important'?'Důležité Admin oznámení obejde uživatelské preference.':'Běžné Admin oznámení respektuje uživatelské nastavení.';
 }
 if($('adminNoticeSeverity'))$('adminNoticeSeverity').onchange=updateAdminNoticeSeverity;
-if($('sendAdminNotice'))$('sendAdminNotice').onclick=async()=>{
-  const expiresRaw=$('adminNoticeExpires').value;
-  const data={recipient:$('adminNoticeRecipient').value,carId:$('adminNoticeVehicle').value||null,severity:$('adminNoticeSeverity').value,title:$('adminNoticeTitle').value.trim(),message:$('adminNoticeMessage').value.trim(),requiresAck:$('adminNoticeAck').checked,expiresAt:expiresRaw?new Date(expiresRaw).toISOString():null};
-  try{const r=await api('adminSendNotification',data);note($('adminNoticeMsg'),'Admin oznámení odesláno · push '+r.sent+'/'+(r.devices||0)+'.','msg ok');$('adminNoticeTitle').value=$('adminNoticeMessage').value=$('adminNoticeExpires').value='';$('adminNoticeVehicle').value='';$('adminNoticeSeverity').value='info';$('adminNoticeAck').checked=false;updateAdminNoticeSeverity();await refresh()}catch(x){note($('adminNoticeMsg'),errorText(x),'msg err')}
-};
+if($('sendAdminNotice'))$('sendAdminNotice').onclick=()=>submitNotice('adminNotice');
 if($('themeMode'))$('themeMode').onchange=()=>setThemePreference($('themeMode').value);
 document.querySelectorAll('.pneu-tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 if($('seasonCampaign'))$('seasonCampaign').onchange=()=>{seasonDashboardCampaign=$('seasonCampaign').value;renderSeasonDashboard()};
@@ -1862,6 +1970,11 @@ if($('taskEditSubmit'))$('taskEditSubmit').onclick=submitTaskEdit;
 if($('taskEditCancel'))$('taskEditCancel').onclick=()=>{if(!taskEditContext?.saving)closeTaskEdit()};
 if($('taskEditClose'))$('taskEditClose').onclick=()=>{if(!taskEditContext?.saving)closeTaskEdit()};
 document.addEventListener('keydown',event=>{
+  if(scheduleEditContext){
+    if(event.key==='Escape'){event.preventDefault();if(!scheduleEditContext.saving)closeScheduleEdit()}
+    if(event.key==='Tab'){const focusable=[...$('scheduleEditOverlay').querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&el.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
+    return;
+  }
   if(adminOwnPinContext){
     if(event.key==='Escape'){event.preventDefault();if(!adminOwnPinContext.saving)closeAdminOwnPinChange()}
     if(event.key==='Tab'){const focusable=[...$('adminOwnPinOverlay').querySelectorAll('button,input')].filter(el=>!el.disabled&&el.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
