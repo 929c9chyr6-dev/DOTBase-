@@ -51,6 +51,7 @@ function errorText(x){if(x?.data?.message)return x.data.message;return({DUPLICAT
 function lockApp(message='',cls='msg'){
   if(taskDotContext)restoreTaskDotForm();
   closeTaskEdit();
+  closeAdminOwnPinChange();
   taskDraftTimers.forEach(timer=>clearTimeout(timer));taskDraftTimers.clear();taskDrafts.clear();taskSeasonDrafts.clear();taskDraftStates.clear();taskOpenVehicles.clear();taskBusy.clear();taskRecordRequests.clear();pendingTireTaskId=null;
   const lastUserId=me?.id||$('loginUser')?.value||localStorage.getItem('lastLoginUserId')||'';
   if(lastUserId)localStorage.setItem('lastLoginUserId',lastUserId);
@@ -1565,7 +1566,7 @@ function renderAdminUsers(){
     const testInfo=u.role==='test'?'<div class="test-profile-note"><b>🧪 TEST profil</b><div class="small">Nemá žádná výchozí oprávnění. Nastavíš je v Admin → Práva uživatelů a přístup k modulům v Admin → Moduly.</div></div>':'';
     const pinReset=u.pinChangeRequired?.required?'<div class="pin-reset-pending"><b>🔐 Čeká na změnu PINu</b><div class="small">'+(u.pinChangeRequired.requireOldPin?'Při změně bude vyžadován i stávající PIN.':'Při změně nebude vyžadováno opětovné zadání stávajícího PINu.')+' · od '+dt(u.pinChangeRequired.requestedAt)+'</div></div>':'';
     const loginLock=u.loginLockedAt?'<div class="login-lock-alert"><b>🔒 ZABLOKOVÁNO PO 3 POKUSECH</b><div class="small">Zablokováno '+dt(u.loginLockedAt)+'. Pro odemčení použij „Vyžádat změnu PINu“ a nejdřív fyzicky ověř, co se stalo.</div></div>':(u.failedPinAttempts?'<div class="login-attempt-warning">⚠️ Chybné pokusy o PIN: <b>'+u.failedPinAttempts+'/3</b> · poslední '+dt(u.lastFailedPinAt)+'</div>':'');
-    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">💾 Uložit účet</button>'+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button><button class="delete-user danger-btn" data-id="'+e(u.id)+'">🗑 Smazat uživatele</button>':'')+'</div></div>';
+    return '<div class="user '+(u.role==='test'?'test-profile':'')+'"><div class="row mobile-stack"><input class="un" data-id="'+e(u.id)+'" value="'+e(u.name)+'">'+role+'</div><div class="small" style="margin:6px 0">'+presenceHtml(u)+' · poslední aktivita '+dt(u.lastActivityAt)+' · naposledy online '+dt(u.lastOnlineAt)+' · záznamů '+u.recordCount+' · push zařízení '+u.pushDevices+' · '+(u.active?'aktivní':'zablokovaný')+'</div>'+loginLock+pinReset+testInfo+'<div class="toolbar"><button class="admin-user-profile secondary" data-id="'+e(u.id)+'">👤 Přehled profilu</button><button class="primary su" data-id="'+e(u.id)+'">💾 Uložit účet</button>'+(admin&&u.id===me?.id?'<button class="change-admin-own-pin secondary" data-id="'+e(u.id)+'">🔐 Změnit PIN</button>':'')+(!admin?'<button class="request-pin-reset secondary" data-id="'+e(u.id)+'">🔐 '+(u.pinChangeRequired?.required?'Upravit výzvu PINu':'Vyžádat změnu PINu')+'</button><button class="tu '+(u.active?'danger-btn':'primary')+'" data-id="'+e(u.id)+'" data-a="'+u.active+'">'+(u.active?'Zablokovat':'Aktivovat')+'</button><button class="delete-user danger-btn" data-id="'+e(u.id)+'">🗑 Smazat uživatele</button>':'')+'</div></div>';
   }).join('');
   document.querySelectorAll('.su').forEach(b=>b.onclick=async()=>{
     const id=b.dataset.id,n=document.querySelector('.un[data-id="'+id+'"]').value,u=(D.users||[]).find(x=>x.id===id);
@@ -1574,8 +1575,38 @@ function renderAdminUsers(){
   });
   document.querySelectorAll('.admin-user-profile').forEach(b=>b.onclick=()=>openAdminUserProfile(b.dataset.id));
   document.querySelectorAll('.request-pin-reset').forEach(b=>b.onclick=()=>openAdminPinReset(b.dataset.id));
+  document.querySelectorAll('.change-admin-own-pin').forEach(b=>b.onclick=openAdminOwnPinChange);
   document.querySelectorAll('.tu').forEach(b=>b.onclick=async()=>{await api('adminUpdateUser',{userId:b.dataset.id,active:b.dataset.a!=='true'});await refresh()});
   document.querySelectorAll('.delete-user').forEach(b=>b.onclick=()=>deleteAdminUser(b.dataset.id));
+}
+let adminOwnPinContext=null;
+function openAdminOwnPinChange(){
+  if(me?.role!=='admin'||adminOwnPinContext)return;
+  adminOwnPinContext={userId:me.id,saving:false,returnFocus:document.activeElement,bodyOverflow:document.body.style.overflow};
+  for(const id of ['adminOwnPinOld','adminOwnPinNew','adminOwnPinConfirm'])$(id).value='';
+  $('adminOwnPinUser').textContent=me.name;$('adminOwnPinMsg').innerHTML='';$('adminOwnPinResult').innerHTML='';
+  for(const id of ['adminOwnPinSubmit','adminOwnPinClose','adminOwnPinCancel'])$(id).disabled=false;
+  $('adminOwnPinOverlay').hidden=false;document.body.style.overflow='hidden';$('adminOwnPinOld').focus();
+}
+function closeAdminOwnPinChange(){
+  if(!adminOwnPinContext)return;const context=adminOwnPinContext;adminOwnPinContext=null;
+  $('adminOwnPinOverlay').hidden=true;for(const id of ['adminOwnPinOld','adminOwnPinNew','adminOwnPinConfirm'])$(id).value='';$('adminOwnPinMsg').innerHTML='';
+  document.body.style.overflow=context.bodyOverflow;if(context.returnFocus?.isConnected)context.returnFocus.focus();
+}
+async function submitAdminOwnPinChange(){
+  const context=adminOwnPinContext;if(!context||context.saving||me?.role!=='admin')return;
+  const [oldPin,newPin,confirmPin]=['adminOwnPinOld','adminOwnPinNew','adminOwnPinConfirm'].map(id=>$(id).value.replace(/\D/g,'').slice(0,4));
+  if(oldPin.length!==4)return note($('adminOwnPinMsg'),'Zadej současný čtyřmístný PIN.','msg err');
+  if(newPin.length!==4)return note($('adminOwnPinMsg'),'Nový PIN musí mít 4 číslice.','msg err');
+  if(newPin!==confirmPin)return note($('adminOwnPinMsg'),'Nové PINy se neshodují.','msg err');
+  context.saving=true;for(const id of ['adminOwnPinSubmit','adminOwnPinClose','adminOwnPinCancel'])$(id).disabled=true;
+  try{
+    const r=await api('changeOwnPin',{oldPin,newPin,confirmPin});
+    if(adminOwnPinContext!==context||me?.id!==context.userId||!tok)return;
+    if(r.token)tok=r.token;if(r.user)me=r.user;closeAdminOwnPinChange();
+    note($('adminOwnPinResult'),'PIN byl změněn. Při příštím přihlášení použij nový PIN.','msg ok');await refresh();
+  }catch(x){if(adminOwnPinContext===context)note($('adminOwnPinMsg'),errorText(x),'msg err')}
+  finally{context.saving=false;if(!adminOwnPinContext||adminOwnPinContext===context)for(const id of ['adminOwnPinSubmit','adminOwnPinClose','adminOwnPinCancel'])$(id).disabled=false}
 }
 async function deleteAdminUser(id){
   const u=(D.users||[]).find(x=>x.id===id);if(!u||u.role==='admin')return;
@@ -1831,6 +1862,11 @@ if($('taskEditSubmit'))$('taskEditSubmit').onclick=submitTaskEdit;
 if($('taskEditCancel'))$('taskEditCancel').onclick=()=>{if(!taskEditContext?.saving)closeTaskEdit()};
 if($('taskEditClose'))$('taskEditClose').onclick=()=>{if(!taskEditContext?.saving)closeTaskEdit()};
 document.addEventListener('keydown',event=>{
+  if(adminOwnPinContext){
+    if(event.key==='Escape'){event.preventDefault();if(!adminOwnPinContext.saving)closeAdminOwnPinChange()}
+    if(event.key==='Tab'){const focusable=[...$('adminOwnPinOverlay').querySelectorAll('button,input')].filter(el=>!el.disabled&&el.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
+    return;
+  }
   if(taskEditContext){
     if(event.key==='Escape'){event.preventDefault();if(!taskEditContext.saving)closeTaskEdit()}
     if(event.key==='Tab'){const focusable=[...$('taskEditOverlay').querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&el.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
@@ -1843,6 +1879,10 @@ document.addEventListener('keydown',event=>{
     if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
   }
 });
+if($('adminOwnPinSubmit'))$('adminOwnPinSubmit').onclick=submitAdminOwnPinChange;
+for(const id of ['adminOwnPinClose','adminOwnPinCancel'])if($(id))$(id).onclick=()=>{if(!adminOwnPinContext?.saving)closeAdminOwnPinChange()};
+for(const id of ['adminOwnPinOld','adminOwnPinNew','adminOwnPinConfirm'])if($(id))$(id).oninput=()=>$(id).value=$(id).value.replace(/\D/g,'').slice(0,4);
+if($('adminOwnPinConfirm'))$('adminOwnPinConfirm').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();submitAdminOwnPinChange()}};
 if($('createTireTask'))$('createTireTask').onclick=async()=>{
   const date=$('tireTaskDate').value,rows=collectTireTaskDraftRows();
   const entries=rows.map(r=>({time:r.time,carId:r.carId,category:r.category,dotOrder:[r.firstSeason,r.firstSeason==='summer'?'winter':'summer'],instructions:r.instructions}));

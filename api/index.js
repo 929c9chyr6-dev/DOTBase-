@@ -944,15 +944,17 @@ export default async function handler(req, res) {
       return json(res,423,{error:'PIN_CHANGE_REQUIRED',message:'Než bude možné pokračovat, je nutné nastavit nový PIN.',requireOldPin:pinReset.requireOldPin});
     }
     if(body.action==='changeOwnPin'){
-      if(!pinReset)return json(res,409,{error:'PIN_CHANGE_NOT_REQUIRED',message:'Pro tento účet není změna PINu vyžádána.'});
+      const directAdminChange=currentUser.role==='admin'&&!pinReset;
+      if(!pinReset&&!directAdminChange)return json(res,409,{error:'PIN_CHANGE_NOT_REQUIRED',message:'Pro tento účet není změna PINu vyžádána.'});
+      if(body.userId!==undefined&&String(body.userId)!==currentUser.id)return json(res,403,{error:'PIN_SELF_ONLY',message:'Tímto formulářem můžeš změnit pouze svůj vlastní PIN.'});
       const oldPin=String(body.oldPin||''),newPin=String(body.newPin||''),confirmPin=String(body.confirmPin||'');
-      if(pinReset.requireOldPin&&(!/^\d{4}$/.test(oldPin)||!safeEqualHex(currentUser.pinHash,pinHash(oldPin))))return json(res,400,{error:'PIN_OLD',message:'Stávající PIN není správný.'});
+      if((currentUser.role==='admin'||pinReset?.requireOldPin)&&(!/^\d{4}$/.test(oldPin)||!safeEqualHex(currentUser.pinHash,pinHash(oldPin))))return json(res,400,{error:'PIN_OLD',message:'Stávající PIN není správný.'});
       if(!/^\d{4}$/.test(newPin))return json(res,400,{error:'PIN',message:'Nový PIN musí mít 4 číslice.'});
       if(newPin!==confirmPin)return json(res,400,{error:'PIN_MATCH',message:'Nové PINy se neshodují.'});
       const newHash=pinHash(newPin);
       if(safeEqualHex(currentUser.pinHash,newHash))return json(res,400,{error:'PIN_SAME',message:'Nový PIN musí být jiný než stávající PIN.'});
       if(cfg.users.some((u)=>u.id!==currentUser.id&&u.active&&safeEqualHex(u.pinHash,newHash)))return json(res,409,{error:'PIN_USED'});
-      const resetBefore={...pinReset};
+      const resetBefore=pinReset?{...pinReset}:null;
       currentUser.pinHash=newHash;
       currentUser.pinChangeRequired=null;
       currentUser.failedPinAttempts=0;
@@ -960,7 +962,7 @@ export default async function handler(req, res) {
       currentUser.loginLockedAt=null;
       currentUser.pinChangedAt=new Date().toISOString();
       await writeConfig(cfg);
-      await appendAudit(currentUser,'user_pin_self_change','Uživatel si změnil PIN po výzvě administrátora',{userId:currentUser.id,resetRequest:resetBefore});
+      await appendAudit(currentUser,'user_pin_self_change',directAdminChange?'Admin si přímo změnil vlastní PIN':'Uživatel si změnil PIN po výzvě administrátora',{userId:currentUser.id,changeMode:directAdminChange?'admin_direct':'reset_request',resetRequest:resetBefore});
       const token=sign({uid:currentUser.id,role:currentUser.role,sg:cfg.sessionGeneration,exp:Date.now()+12*60*60*1000});
       return json(res,200,{ok:true,token,user:{id:currentUser.id,name:currentUser.name,role:currentUser.role}});
     }
