@@ -4,6 +4,7 @@ import webpush from 'web-push';
 import { TASK_ACTIONS, TASK_NOTICE_KEYS, TaskError, applyTaskAction, taskGroups, taskGroupId, taskWorkClosed, taskIsActive, taskRecordReady, taskDotOrder, taskRequiresBothRecords, taskSeasonRecord, taskSeasonRecordReady, linkTaskRecord } from '../lib/task-workflow.js';
 import { mutateBlobJsonArray, BlobJsonConflictError } from '../lib/blob-json.js';
 import { NoticeError, noticeDraft, deliverNotice, createSchedule, changeSchedule, scheduledNoticeData, noticeAudit, SCHEDULE_PATH } from '../lib/manual-notifications.js';
+import { TASK_CONCEPT_ACTIONS, getTaskConcepts, publicTaskConcepts, saveTaskConcept, beginTaskConceptPublish, finishTaskConceptPublish, releaseTaskConceptPublish, deleteTaskConcept } from '../lib/task-concepts.js';
 
 const SECRET = process.env.SESSION_SECRET || 'missing-secret';
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
@@ -101,7 +102,7 @@ function publicModules(cfg,currentUser){
 }
 function actionModule(action){
   if (['pneuData','fleetData','historyPage','historyExportData','addRecord','editRecord','deleteRecord','attentionSave'].includes(action)) return 'pneu';
-  if (action==='taskData'||TASK_ACTIONS.has(action)) return 'tiretask';
+  if (action==='taskData'||TASK_ACTIONS.has(action)||TASK_CONCEPT_ACTIONS.has(action)) return 'tiretask';
   if (['vehicleOverviewData','vehicleAdd','vehicleCategoryAdd','vehicleCategoryRename','vehicleCategoryDelete'].includes(action)) return 'vehicleOverview';
   if (['notificationData','sendOperationalNotification','adminSendNotification','notificationScheduleEdit','notificationScheduleCancel'].includes(action)) return 'notifications';
   if (['pushSubscribe','pushUnsubscribe','myPushDevices','saveNotificationPrefs'].includes(action)) return 'settings';
@@ -395,16 +396,16 @@ function canViewNotification(n,user){
   const key=n.type.slice(5);
   return !TASK_NOTICE_KEYS.includes(key)||normalizeTaskNotifications(user.taskNotifications,user.role)[key];
 }
-async function createNotification(row) {
+async function createNotification(row, stableId = null) {
   const normalized=normalizeNotificationRecord(row);
   const n = {
     ...normalized,
-    id: uid('n'), ts: Date.now(), createdAt: new Date().toISOString(),
+    id: stableId || uid('n'), ts: Date.now(), createdAt: new Date().toISOString(),
     recipientUserIds: [...new Set((row.recipientUserIds || []).filter(Boolean))],
     acks: [], seen: [],
   };
-  await mutateJsonArray('notifications.json',rows=>({rows:[n,...rows].slice(0,500),changed:true}));
-  return n;
+  const out=await mutateJsonArray('notifications.json',rows=>{const existing=stableId&&rows.find(row=>row.id===stableId);return existing?{rows,changed:false,notice:existing}:{rows:[n,...rows].slice(0,500),changed:true,notice:n}});
+  return {...out.notice,...(!out.changed?{alreadyCreated:true}:{})};
 }
 async function patchNotification(id, patch) {
   const out=await mutateJsonArray('notifications.json',rows=>{const n=rows.find(x=>x.id===id);if(n)Object.assign(n,patch);return {rows,changed:!!n,notification:n||null}});
@@ -759,7 +760,7 @@ async function sendPushToUsers(cfg, userIds, payload) {
   return { sent, failed, devices: targets.length };
 }
 
-async function notifyTaskAssigned(cfg,tasks,assignee,actor){
+async function notifyTaskAssigned(cfg,tasks,assignee,actor,stableId=null){
   if(!assignee||assignee.active===false||!tasks?.length||!hasPermission(assignee,'notificationsReceive'))return {sent:0,failed:0,devices:0};
   const carById=Object.fromEntries(cfg.cars.map((c)=>[c.id,c])),first=tasks[0],multi=tasks.length>1;
   const plates=tasks.map((t)=>carById[t.carId]?.plate||'vozidlo').slice(0,4);
@@ -772,14 +773,15 @@ async function notifyTaskAssigned(cfg,tasks,assignee,actor){
     recipient:'user',recipientUserIds:[assignee.id],taskId:first.id,taskIds:tasks.map((t)=>t.id),
     carId:multi?null:first.carId,carPlate:multi?'':(carById[first.carId]?.plate||''),
     byUserId:actor?.id||'system',byUserName:actor?.name||'TASK',byUserRole:actor?.role||''
-  });
+  },stableId);
+  if(n.alreadyCreated)return {sent:n.sent||0,failed:n.failed||0,devices:n.devices||0};
   const result=await sendPushToUsers(cfg,[assignee.id],{title:'📋 DŮLEŽITÉ · '+title,body,tag:'task-assignment-'+(first.batchId||first.id),url:'/?module=tiretask&task='+encodeURIComponent(first.id)});
   await patchNotification(n.id,result);
   return result;
 }
 async function notifyTaskEvent(cfg,event,actor){
   const {key,task,tasks}=event;
-  if(key==='assigned')return notifyTaskAssigned(cfg,tasks,cfg.users.find(u=>u.id===task.assignedToUserId),actor);
+  if(key==='assigned')return notifyTaskAssigned(cfg,tasks,cfg.users.find(u=>u.id===task.assignedToUserId),actor,event.assignmentNoticeId||null);
   if(key==='problem')return notifyTaskProblem(cfg,task,actor);
   const recipients=cfg.users.filter(u=>u.active!==false&&u.id!==actor.id&&hasPermission(u,'notificationsReceive')&&normalizeTaskNotifications(u.taskNotifications,u.role)[key]);
   if(!recipients.length)return;
@@ -996,14 +998,14 @@ export default async function handler(req, res) {
       return json(res,200,{records:compact,recordTotal:recs.length,seasonRecords:buildSeasonRecordEvidence(recs),attentionIssues:issues.slice(0,100),attentionIssueCount:issues.length,pneuTasks,recordUsers:cfg.users.filter((u)=>u.active!==false).map((u)=>({id:u.id,name:u.name}))});
     }
     if(body.action==='taskData'){
-      const [rows,recs]=await Promise.all([getTireTasks(),getRecords()]),caps=tireTaskCapabilities(currentUser),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView')||caps.edit||caps.delete;
+      const caps=tireTaskCapabilities(currentUser),[rows,recs,concepts]=await Promise.all([getTireTasks(),getRecords(),caps.create||caps.edit||caps.delete?getTaskConcepts():[]]),canCompletedView=hasPermission(currentUser,'tireTaskCompletedView')||caps.edit||caps.delete;
       const publicRows=publicTireTasks(cfg,rows,recs),myOrigins=new Set(publicRows.filter(t=>t.assignedToUserId===currentUser.id&&t.originBatchId).map(t=>t.originBatchId));
       for(const assigned of publicRows.filter(t=>t.assignedToUserId===currentUser.id)){
         let id=assigned.sourceTaskId;const seen=new Set();while(id&&!seen.has(id)){seen.add(id);const source=publicRows.find(t=>t.id===id);if(!source)break;myOrigins.add(taskGroupId(source));id=source.sourceTaskId}
       }
       const visibleRows=canCompletedView?publicRows:publicRows.filter(t=>!taskWorkClosed(t)||t.assignedToUserId===currentUser.id||myOrigins.has(taskGroupId(t)));
       const users=cfg.users.filter(u=>u.active!==false&&userCanAccessModule(cfg,'tiretask',u)).map(u=>({id:u.id,name:u.name,role:u.role}));
-      return json(res,200,{tireTasks:visibleRows,tireTaskGroups:taskGroups(visibleRows),tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[{id:currentUser.id,name:currentUser.name,role:currentUser.role,active:true}],tireTaskAssignableUsers:(caps.create||caps.edit)?users:[],tireTaskHandoverUsers:users});
+      return json(res,200,{tireTasks:visibleRows,tireTaskGroups:taskGroups(visibleRows),tireTaskConcepts:publicTaskConcepts(cfg,concepts,currentUser,caps,rows),tireTaskCapabilities:caps,tireTaskCompletedView:canCompletedView,tireTaskCars:cfg.cars.filter((c)=>c.active!==false).map((c)=>({id:c.id,plate:c.plate,name:c.name||'',category:c.category||'',vin:c.vin||''})),tireTaskArchiveUsers:canCompletedView?cfg.users.map((u)=>({id:u.id,name:u.name,role:u.role,active:u.active!==false})):[{id:currentUser.id,name:currentUser.name,role:currentUser.role,active:true}],tireTaskAssignableUsers:(caps.create||caps.edit)?users:[],tireTaskHandoverUsers:users});
     }
     if(body.action==='notificationData'){
       const [notifications,notificationSchedules]=await Promise.all([getNotificationLog(),scheduledNoticeData(cfg,currentUser)]);
@@ -1108,9 +1110,47 @@ export default async function handler(req, res) {
       return json(res, 200, { ok: true, tireTaskLinked:completedTask?{id:completedTask.id}:null,tireTaskCompleted:completedTask?.status==='completed'?{id:completedTask.id}:null });
     }
 
+    if(TASK_CONCEPT_ACTIONS.has(body.action)){
+      const ctx={cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),uid,now:new Date().toISOString(),today:pragueDate(),normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user)};
+      try{
+        if(body.action==='tireTaskConceptSave'||body.action==='tireTaskConceptDelete'){
+          const out=body.action==='tireTaskConceptSave'?await saveTaskConcept(body,ctx):await deleteTaskConcept(body,ctx);
+          if(out.changed){await touchSyncVersion();await appendAudit(currentUser,body.action==='tireTaskConceptSave'?'tiretask_concept_save':'tiretask_concept_delete',body.action==='tireTaskConceptSave'?'Uložen koncept TASKu':'Smazán koncept TASKu',{conceptId:out.row.id,version:out.row.version,vehicleCount:out.row.entries?.length||0})}
+          return json(res,200,{ok:true,conceptId:out.row.id,version:out.row.version,status:out.row.status});
+        }
+        const claim=await beginTaskConceptPublish(body,ctx,payload=>{
+          if(payload.entries.some(entry=>!normalizeTireTaskCategory(cfg,entry.category)))throw new TaskError('VEHICLE_CATEGORY','Před odesláním doplň platnou skupinu u každého vozidla.',400);
+          return applyTaskAction([],{...payload,action:'tireTaskCreateBatch'},ctx);
+        }),concept=claim.row;
+        if(concept.status==='published')return json(res,200,{ok:true,conceptId:concept.id,batchId:concept.publishedBatchId,count:concept.publishedCount,alreadyCreated:true});
+        if(claim.changed)await touchSyncVersion();
+        let out;
+        try{
+          out=await mutateTireTasks(rows=>{
+            // Across two stores, the source ID in the actual TASK is the
+            // publication authority. Concurrent/retried requests create once.
+            const existing=rows.filter(t=>t.createdFromConceptId===concept.id);
+            if(existing.length)return {rows,changed:false,audit:[],events:existing[0].assignedToUserId?[{key:'assigned',task:existing[0],tasks:existing}]:[],result:{ok:true,batchId:taskGroupId(existing[0]),count:existing.length,alreadyCreated:true}};
+            const created=applyTaskAction(rows,{...concept,action:'tireTaskCreateBatch',requestId:'concept-'+concept.id},ctx);
+            for(const task of created.rows.filter(t=>taskGroupId(t)===created.result.batchId))task.createdFromConceptId=concept.id;
+            for(const event of created.events){if(taskGroupId(event.task)===created.result.batchId){event.task.createdFromConceptId=concept.id;for(const task of event.tasks)task.createdFromConceptId=concept.id}}
+            return created;
+          });
+        }catch(error){if(error instanceof TaskError&&error.code!=='TIRETASK_CONFLICT')await releaseTaskConceptPublish(concept.id,concept.version);throw error}
+        for(const a of out.audit)await appendAudit(currentUser,a.type,a.message,{...a.data,conceptId:concept.id});
+        for(const event of out.events){if(event.key==='assigned'&&event.task.createdFromConceptId===concept.id)event.assignmentNoticeId='task-concept-assignment-'+concept.id;await notifyTaskEvent(cfg,event,currentUser).catch(error=>console.error('TASK notification',error?.message))}
+        await finishTaskConceptPublish(concept.id,out.result,currentUser,new Date().toISOString());await touchSyncVersion();
+        return json(res,200,{...out.result,conceptId:concept.id});
+      }catch(error){if(error instanceof TaskError)return json(res,error.status,{error:error.code,message:error.message});throw error}
+    }
+
     if (TASK_ACTIONS.has(body.action)) {
       const records=['tireTaskCompleteVehicle','tireTaskClose','tireTaskHandover'].includes(body.action)?await getRecords():[];
       try{
+        if(body.action==='tireTaskDelete'&&tireTaskCapabilities(currentUser).delete){
+          const tasks=await getTireTasks(),target=tasks.find(t=>t.id===String(body.taskId||'')||taskGroupId(t)===String(body.batchId||''));
+          if(target?.createdFromConceptId){const members=tasks.filter(t=>taskGroupId(t)===taskGroupId(target));await finishTaskConceptPublish(target.createdFromConceptId,{batchId:taskGroupId(target),count:members.length},{id:target.createdById,name:target.createdBy},new Date().toISOString())}
+        }
         const out=await mutateTireTasks(rows=>applyTaskAction(rows,body,{cfg,user:currentUser,caps:tireTaskCapabilities(currentUser),canWriteDot:hasPermission(currentUser,'dotCreate'),uid,now:new Date().toISOString(),today:pragueDate(),records,normalizeCategory:value=>normalizeTireTaskCategory(cfg,value),canAccess:user=>userCanAccessModule(cfg,'tiretask',user),validateRecord:validateRecordFields}));
         if(out.result.deletedTaskIds?.length){
           const ids=new Set(out.result.deletedTaskIds),at=new Date().toISOString();
@@ -1733,9 +1773,9 @@ export default async function handler(req, res) {
     }
 
     if (body.action === 'adminBackup') {
-      const [recs, audit, notifications, notificationSchedules] = await Promise.all([getRecords(), getAudit(), getNotificationLog(), readJson(SCHEDULE_PATH,[])]);
+      const [recs, audit, notifications, notificationSchedules, tireTasks, tireTaskConcepts] = await Promise.all([getRecords(), getAudit(), getNotificationLog(), readJson(SCHEDULE_PATH,[]),getTireTasks(),getTaskConcepts()]);
       const safeUsers = cfg.users.map(({ pinHash, ...u }) => u);
-      return json(res, 200, { version: 9, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, notifications: notifications.filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n?.type||''))), notificationSchedules, notificationSettings: cfg.notificationSettings, system: systemState(cfg), modules: normalizeModules(cfg.modules) });
+      return json(res, 200, { version: 10, exportedAt: new Date().toISOString(), users: safeUsers, cars: cfg.cars, vehicleCategories: cfg.vehicleCategories, records: enrichRecords(cfg, recs), audit, tireTasks, tireTaskConcepts, notifications: notifications.filter((n)=>!['traffic_alert','traffic_resolved'].includes(String(n?.type||''))), notificationSchedules, notificationSettings: cfg.notificationSettings, system: systemState(cfg), modules: normalizeModules(cfg.modules) });
     }
 
     return json(res, 400, { error: 'ACTION' });

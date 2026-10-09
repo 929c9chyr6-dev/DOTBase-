@@ -124,7 +124,7 @@ test('cron endpoint requires GET and configured secret, works with no browser or
   process.env.CRON_SECRET='isolated-cron-secret';assert.equal((await invoke('POST','Bearer isolated-cron-secret')).status,405);assert.equal((await invoke('GET','Bearer bad')).status,401);
   const r=await schedule();const stored=rows();stored[0].scheduledAt=new Date(Date.now()-1000).toISOString();await put(SCHEDULE_PATH,JSON.stringify(stored),{allowOverwrite:true});
   const result=await invoke('GET','Bearer isolated-cron-secret');assert.equal(result.status,200);assert.equal(result.body.sent,1);assert.equal(rows()[0].status,'sent');assert.equal(notices()[0].reason,'PUSH_NOT_CONFIGURED');
-  const backup=await ok('admin','adminBackup');assert.equal(backup.version,9);assert.equal(backup.notificationSchedules[0].id,r.scheduleId);
+  const backup=await ok('admin','adminBackup');assert.equal(backup.version,10);assert.equal(backup.notificationSchedules[0].id,r.scheduleId);
   delete process.env.CRON_SECRET;assert.equal((await invoke('GET','Bearer isolated-cron-secret')).status,401);
 });
 

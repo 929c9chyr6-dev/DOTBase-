@@ -1,1 +1,1 @@
-{"type":"module","scripts":{"test":"node --loader ./tests/blob-loader.mjs --test tests/task-api.test.mjs tests/admin-pin-api.test.mjs tests/notification-schedules-api.test.mjs"},"dependencies":{"@vercel/blob":"2.8.1","web-push":"3.6.7"}}
+{"type":"module","scripts":{"test":"node --loader ./tests/blob-loader.mjs --test tests/task-api.test.mjs tests/admin-pin-api.test.mjs tests/notification-schedules-api.test.mjs tests/task-concepts-api.test.mjs"},"dependencies":{"@vercel/blob":"2.8.1","web-push":"3.6.7"}}
